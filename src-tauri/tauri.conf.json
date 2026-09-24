@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Ren",
+  "version": "0.1.0",
+  "identifier": "com.ren.context",
+  "build": { "frontendDist": "../frontend/dist", "devUrl": "http://localhost:5173", "beforeDevCommand": "npm --prefix ../frontend run dev", "beforeBuildCommand": "npm --prefix ../frontend run build" },
+  "app": { "windows": [{ "title": "Ren", "width": 1220, "height": 780, "minWidth": 900, "minHeight": 600 }] },
+  "bundle": { "active": true, "targets": "all" }
+}
+
