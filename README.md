@@ -1,6 +1,6 @@
 # Ren
 
-Ren is a local-first personal context engine. Import files or capture a thought; Ren stores an untouched managed copy, derives searchable knowledge, drafts cited topic notes, and answers questions from your own sources.
+Ren is a local-first knowledge inbox: **Dump → Organize → Remind**. Drop a PDF, TXT, or Markdown file; Ren keeps a safe managed copy, turns useful concepts into small source-backed cards, and resurfaces cards you have not reviewed.
 
 ## Development
 
@@ -25,9 +25,18 @@ Open the shown local URL. The development UI expects the API at `http://127.0.0.
 
 Run `./run-dev.ps1` instead to start both processes from the repository root.
 
+## What Ren does now
+
+- **Inbox:** import PDF, TXT, and Markdown files only.
+- **My Knowledge:** browse and search the small knowledge cards extracted from each source.
+- **Remember:** review a small queue. Cards return after 1, 3, 7, 14, then 30 days.
+- **Source-backed:** every card opens its local source file. Ren never edits or moves the original.
+
+The first version intentionally has no document chat, agents, cloud sync, browser extension, vector database, or knowledge graph.
+
 ## Privacy model
 
-Ren copies imported files into its own application-data library and never moves, renames, modifies, or deletes originals. Text, chunks, notes, and the SQLite database are local. API keys are stored in the operating-system credential vault when available and are never written to SQLite. AI processing is optional; without a key Ren uses local extraction, search, note drafting, and extractive answers.
+Ren copies imported files into its own application-data library and never moves, renames, modifies, or deletes originals. Extracted text, knowledge cards, review history, and the SQLite database are local. The first version does not require an AI key.
 
 ## Desktop packaging
 

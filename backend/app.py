@@ -13,7 +13,7 @@ import urllib.error
 import urllib.request
 import uuid
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Literal
@@ -105,6 +105,21 @@ def initialize_database() -> None:
             CREATE TABLE IF NOT EXISTS settings (
               key TEXT PRIMARY KEY, value TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS cards (
+              id TEXT PRIMARY KEY,
+              source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+              topic_id TEXT REFERENCES topics(id) ON DELETE SET NULL,
+              title TEXT NOT NULL,
+              body TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'active',
+              last_seen_at TEXT,
+              review_count INTEGER NOT NULL DEFAULT 0,
+              next_review_at TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              UNIQUE(source_id, title)
+            );
+            CREATE INDEX IF NOT EXISTS idx_cards_review ON cards(status, next_review_at);
             """
         )
 
@@ -239,13 +254,62 @@ def process_source(source_id: str, job_id: str) -> None:
         except Exception as error:
             db.execute("UPDATE sources SET status='failed', error_message=?, updated_at=? WHERE id=?", (str(error), now(), source_id))
             update_job(db, job_id, "failed", "failed", str(error))
-    # A draft is derived knowledge, never a silent edit. Creating it after the
-    # transaction avoids competing SQLite writes while the source is indexed.
-    for topic_id in dict.fromkeys(affected_topics):
-        try:
-            create_note_draft(topic_id)
-        except ValueError:
-            pass
+    # Ren's small-MVP output is reusable cards, not a large generated document.
+    # This happens after indexing so source writes do not compete in SQLite.
+    if affected_topics:
+        create_cards_for_source(source_id)
+
+
+def source_sentences(text: str) -> list[str]:
+    sentences = re.split(r"(?<=[.!?])\s+|\n{2,}", normalize_text(text))
+    useful = [re.sub(r"\s+", " ", sentence).strip() for sentence in sentences]
+    return [sentence for sentence in useful if 35 <= len(sentence) <= 520]
+
+
+def card_body(title: str, sentences: list[str], fallback: str) -> str:
+    related = [sentence for sentence in sentences if title.lower() in sentence.lower()]
+    selected = related[:2] or sentences[:1]
+    body = " ".join(selected).strip() or fallback[:420].strip()
+    return body[:700]
+
+
+def create_cards_for_source(source_id: str) -> None:
+    with db_connection() as db:
+        source = db.execute("SELECT * FROM sources WHERE id=? AND status='ready'", (source_id,)).fetchone()
+        if not source:
+            return
+        topic_rows = db.execute(
+            "SELECT t.id, t.name FROM topics t JOIN source_topics st ON st.topic_id=t.id WHERE st.source_id=? ORDER BY st.confidence DESC",
+            (source_id,),
+        ).fetchall()
+        if not topic_rows:
+            return
+        db.execute("DELETE FROM cards WHERE source_id=?", (source_id,))
+        sentences = source_sentences(source["extracted_text"])
+        timestamp = now()
+        # Cap at five: the point is a small useful set, not a noisy summary dump.
+        for topic in topic_rows[:5]:
+            db.execute(
+                """INSERT INTO cards(id, source_id, topic_id, title, body, status, next_review_at, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)""",
+                (
+                    str(uuid.uuid4()), source_id, topic["id"], topic["name"],
+                    card_body(topic["name"], sentences, source["extracted_text"]),
+                    timestamp, timestamp, timestamp,
+                ),
+            )
+
+
+def card_payload(row: sqlite3.Row) -> dict[str, Any]:
+    payload = dict(row)
+    payload["source"] = {"id": row["source_id"], "filename": row["filename"]}
+    return payload
+
+
+def review_timestamp(review_count: int) -> str:
+    intervals = (1, 3, 7, 14, 30)
+    days = intervals[min(max(review_count - 1, 0), len(intervals) - 1)]
+    return (datetime.now(UTC) + timedelta(days=days)).isoformat()
 
 
 def query_rows(query: str, limit: int = 8) -> list[sqlite3.Row]:
@@ -451,8 +515,12 @@ def save_settings(payload: SettingsInput) -> dict[str, Any]:
 @app.post("/api/captures/files")
 async def import_files(background_tasks: BackgroundTasks, files: list[UploadFile] = File(...)) -> list[dict[str, Any]]:
     results = []
+    allowed_extensions = {".pdf", ".txt", ".md", ".markdown"}
     for upload in files:
         filename = upload.filename or "Untitled"
+        if Path(filename).suffix.lower() not in allowed_extensions:
+            results.append({"filename": filename, "status": "unsupported", "error": "Ren currently supports PDF, TXT, and Markdown files."})
+            continue
         content = await upload.read()
         source_id, duplicate = create_source(filename, "file", content)
         if duplicate:
@@ -545,6 +613,77 @@ def list_topics() -> list[dict[str, Any]]:
                               FROM topics t LEFT JOIN source_topics st ON st.topic_id=t.id
                               LEFT JOIN notes n ON n.topic_id=t.id GROUP BY t.id ORDER BY source_count DESC, t.name""").fetchall()
     return [dict(row) for row in rows]
+
+
+@app.get("/api/cards")
+def list_cards(q: str = "") -> list[dict[str, Any]]:
+    with db_connection() as db:
+        if q.strip():
+            rows = db.execute(
+                """SELECT c.*, s.filename, t.name AS topic_name FROM cards c
+                   JOIN sources s ON s.id=c.source_id LEFT JOIN topics t ON t.id=c.topic_id
+                   WHERE c.status='active' AND (c.title LIKE ? OR c.body LIKE ? OR s.filename LIKE ?)
+                   ORDER BY c.updated_at DESC""",
+                (f"%{q.strip()}%", f"%{q.strip()}%", f"%{q.strip()}%"),
+            ).fetchall()
+        else:
+            rows = db.execute(
+                """SELECT c.*, s.filename, t.name AS topic_name FROM cards c
+                   JOIN sources s ON s.id=c.source_id LEFT JOIN topics t ON t.id=c.topic_id
+                   WHERE c.status='active' ORDER BY c.created_at DESC"""
+            ).fetchall()
+    return [card_payload(row) for row in rows]
+
+
+@app.get("/api/remember")
+def remember_queue(limit: int = 5) -> list[dict[str, Any]]:
+    limit = max(1, min(limit, 10))
+    with db_connection() as db:
+        rows = db.execute(
+            """SELECT c.*, s.filename, t.name AS topic_name FROM cards c
+               JOIN sources s ON s.id=c.source_id LEFT JOIN topics t ON t.id=c.topic_id
+               WHERE c.status='active' AND c.next_review_at <= ?
+               ORDER BY c.next_review_at ASC, c.created_at ASC LIMIT ?""",
+            (now(), limit),
+        ).fetchall()
+    return [card_payload(row) for row in rows]
+
+
+@app.get("/api/cards/{card_id}")
+def get_card(card_id: str) -> dict[str, Any]:
+    with db_connection() as db:
+        row = db.execute(
+            """SELECT c.*, s.filename, t.name AS topic_name FROM cards c
+               JOIN sources s ON s.id=c.source_id LEFT JOIN topics t ON t.id=c.topic_id WHERE c.id=?""",
+            (card_id,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "Knowledge card not found")
+    return card_payload(row)
+
+
+@app.post("/api/cards/{card_id}/review")
+def review_card(card_id: str) -> dict[str, Any]:
+    with db_connection() as db:
+        row = db.execute("SELECT review_count FROM cards WHERE id=? AND status='active'", (card_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Active knowledge card not found")
+        count = row["review_count"] + 1
+        due = review_timestamp(count)
+        db.execute(
+            "UPDATE cards SET review_count=?, last_seen_at=?, next_review_at=?, updated_at=? WHERE id=?",
+            (count, now(), due, now(), card_id),
+        )
+    return {"reviewed": True, "review_count": count, "next_review_at": due}
+
+
+@app.post("/api/cards/{card_id}/archive")
+def archive_card(card_id: str) -> dict[str, bool]:
+    with db_connection() as db:
+        cursor = db.execute("UPDATE cards SET status='archived', updated_at=? WHERE id=?", (now(), card_id))
+        if not cursor.rowcount:
+            raise HTTPException(404, "Knowledge card not found")
+    return {"archived": True}
 
 
 @app.get("/api/topics/{topic_id}")

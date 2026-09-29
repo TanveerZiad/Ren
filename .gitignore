@@ -7,4 +7,7 @@ src-tauri/target/
 data/
 .env
 *.log
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
 

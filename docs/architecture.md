@@ -1,10 +1,11 @@
-# Ren architecture
+# Ren architecture: small MVP
 
-The React desktop UI speaks only to a FastAPI service on `127.0.0.1`. The service owns local storage and processing.
+Ren is a local-only pipeline:
 
-`Capture -> managed immutable source copy -> extraction -> chunks + FTS -> topic suggestions -> note draft -> user approval`
+`PDF / TXT / MD -> managed source copy -> text extraction -> topic suggestions -> knowledge cards -> review queue`
 
-SQLite is the source of truth for metadata, processing jobs, source-topic relations, revisions, and question history. Imported files live under Ren's local app-data directory. Generated notes are versioned Markdown in that same directory.
+The FastAPI service owns the SQLite database and all local files. The React interface only displays Inbox, My Knowledge, and Remember views.
 
-The AI adapter is optional and OpenAI-compatible. No upload or AI call is made unless an API key has been explicitly configured. Every generated note and answer uses source identifiers; v0.1 has a deterministic local fallback so a missing provider never blocks capture. Processing creates a pending draft for newly discovered topics, never an approved note.
+Each generated card stores its source, a topic label, review count, last-seen timestamp, and next-review timestamp. A reviewed card returns after 1, 3, 7, 14, then 30 days. A card can be archived when it is not useful.
 
+The source file is permanent and untouched. Cards are derived, replaceable knowledge. No AI key, embedding index, cloud account, or chat model is required for this MVP.
