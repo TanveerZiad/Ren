@@ -37,6 +37,15 @@ class RenApiTests(unittest.TestCase):
         queue_ids = {item["id"] for item in self.client.get("/api/remember").json()}
         self.assertNotIn(card["id"], queue_ids)
 
+    def test_markdown_headings_become_named_knowledge_cards(self):
+        content = "# Retrieval\n\nRetrieval finds useful documents before an answer is generated.\n\n## Embeddings\n\nEmbeddings map text into vectors so similar meanings can be compared."
+        response = self.client.post("/api/captures/text", json={"title": "rag headings", "content": content})
+        self.assertEqual(response.status_code, 200)
+        cards = self.client.get("/api/cards").json()
+        titles = {card["title"] for card in cards}
+        self.assertIn("Retrieval", titles)
+        self.assertIn("Embeddings", titles)
+
     def test_duplicate_capture_is_reported(self):
         payload = {"title": "Same", "content": "A duplicate body."}
         self.client.post("/api/captures/text", json=payload)

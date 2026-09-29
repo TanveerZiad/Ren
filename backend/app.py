@@ -192,6 +192,12 @@ def make_chunks(text: str, size: int = 1100, overlap: int = 180) -> list[str]:
 
 
 STOP_WORDS = {"about", "after", "again", "also", "and", "are", "been", "from", "have", "into", "more", "notes", "that", "this", "with", "your", "the", "for", "how", "what"}
+CARD_STOP_WORDS = STOP_WORDS | {
+    "able", "been", "being", "between", "both", "can", "could", "does", "each", "first",
+    "however", "into", "its", "may", "most", "must", "not", "only", "other", "over",
+    "such", "than", "their", "there", "these", "they", "through", "using", "very", "were",
+    "when", "which", "while", "will", "would", "you", "also", "just", "like",
+}
 
 
 def suggested_topics(filename: str, text: str) -> list[str]:
@@ -266,11 +272,77 @@ def source_sentences(text: str) -> list[str]:
     return [sentence for sentence in useful if 35 <= len(sentence) <= 520]
 
 
-def card_body(title: str, sentences: list[str], fallback: str) -> str:
-    related = [sentence for sentence in sentences if title.lower() in sentence.lower()]
-    selected = related[:2] or sentences[:1]
-    body = " ".join(selected).strip() or fallback[:420].strip()
-    return body[:700]
+def source_title(filename: str) -> str:
+    title = re.sub(r"[_\-.]+", " ", Path(filename).stem).strip()
+    return title[:60].title() or "Imported knowledge"
+
+
+def markdown_sections(text: str) -> list[tuple[str, str]]:
+    """Return compact cards from human-authored Markdown headings when present."""
+    matches = list(re.finditer(r"^#{1,4}\s+(.+?)\s*$", text, flags=re.MULTILINE))
+    sections: list[tuple[str, str]] = []
+    for index, match in enumerate(matches[:5]):
+        title = re.sub(r"\s+", " ", match.group(1)).strip(" #:-")
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        body = normalize_text(text[match.end():end])
+        if 3 <= len(title) <= 80 and len(body) >= 35:
+            sections.append((title, body[:700]))
+    return sections
+
+
+def keyword_counts(text: str) -> dict[str, int]:
+    words = re.findall(r"[A-Za-z][A-Za-z0-9+\-]{2,}", text.lower())
+    counts: dict[str, int] = {}
+    for word in words:
+        if word not in CARD_STOP_WORDS:
+            counts[word] = counts.get(word, 0) + 1
+    return counts
+
+
+def sentence_score(sentence: str, counts: dict[str, int]) -> float:
+    words = set(re.findall(r"[A-Za-z][A-Za-z0-9+\-]{2,}", sentence.lower()))
+    score = sum(min(counts.get(word, 0), 4) for word in words if word not in CARD_STOP_WORDS)
+    # Definitions and explicit statements are usually more useful to revisit.
+    if re.search(r"\b(is|are|means|refers to|uses|helps|enables|because)\b", sentence, re.I):
+        score += 4
+    if ":" in sentence:
+        score += 1
+    return score / max(len(words), 1)
+
+
+def compact_card_title(sentence: str, counts: dict[str, int], number: int) -> str:
+    words = re.findall(r"[A-Za-z][A-Za-z0-9+\-]{2,}", sentence)
+    ranked = sorted(
+        {word.lower() for word in words if word.lower() not in CARD_STOP_WORDS},
+        key=lambda word: (-counts.get(word, 0), word),
+    )
+    if ranked:
+        return " · ".join(word.title() for word in ranked[:2])
+    return f"Key idea {number}"
+
+
+def card_candidates(filename: str, text: str) -> list[tuple[str, str]]:
+    sections = markdown_sections(text)
+    if sections:
+        return sections[:5]
+    sentences = source_sentences(text)
+    counts = keyword_counts(text)
+    scored = sorted(enumerate(sentences), key=lambda item: sentence_score(item[1], counts), reverse=True)
+    selected: list[tuple[str, str]] = []
+    used_words: set[str] = set()
+    for _, sentence in scored:
+        words = set(re.findall(r"[A-Za-z][A-Za-z0-9+\-]{2,}", sentence.lower()))
+        # Avoid five cards that merely repeat the same idea.
+        if used_words and len(words & used_words) / max(len(words), 1) > 0.72:
+            continue
+        selected.append((compact_card_title(sentence, counts, len(selected) + 1), sentence[:700]))
+        used_words |= words
+        if len(selected) == 5:
+            break
+    if selected:
+        return selected
+    fallback = normalize_text(text)[:700]
+    return [(source_title(filename), fallback)] if fallback else []
 
 
 def create_cards_for_source(source_id: str) -> None:
@@ -278,23 +350,15 @@ def create_cards_for_source(source_id: str) -> None:
         source = db.execute("SELECT * FROM sources WHERE id=? AND status='ready'", (source_id,)).fetchone()
         if not source:
             return
-        topic_rows = db.execute(
-            "SELECT t.id, t.name FROM topics t JOIN source_topics st ON st.topic_id=t.id WHERE st.source_id=? ORDER BY st.confidence DESC",
-            (source_id,),
-        ).fetchall()
-        if not topic_rows:
-            return
         db.execute("DELETE FROM cards WHERE source_id=?", (source_id,))
-        sentences = source_sentences(source["extracted_text"])
         timestamp = now()
-        # Cap at five: the point is a small useful set, not a noisy summary dump.
-        for topic in topic_rows[:5]:
+        topic_id = get_or_create_topic(db, source_title(source["filename"]))
+        for title, body in card_candidates(source["filename"], source["extracted_text"]):
             db.execute(
                 """INSERT INTO cards(id, source_id, topic_id, title, body, status, next_review_at, created_at, updated_at)
                    VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)""",
                 (
-                    str(uuid.uuid4()), source_id, topic["id"], topic["name"],
-                    card_body(topic["name"], sentences, source["extracted_text"]),
+                    str(uuid.uuid4()), source_id, topic_id, title, body,
                     timestamp, timestamp, timestamp,
                 ),
             )
@@ -465,7 +529,12 @@ def provider_answer(question: str, rows: list[sqlite3.Row]) -> str | None:
 
 
 def source_payload(row: sqlite3.Row) -> dict[str, Any]:
-    return dict(row) | {"topics": [item["name"] for item in get_source_topics(row["id"])]}
+    with db_connection() as db:
+        card_count = db.execute("SELECT COUNT(*) AS total FROM cards WHERE source_id=? AND status='active'", (row["id"],)).fetchone()["total"]
+    return dict(row) | {
+        "topics": [item["name"] for item in get_source_topics(row["id"])],
+        "card_count": card_count,
+    }
 
 
 def get_source_topics(source_id: str) -> list[sqlite3.Row]:

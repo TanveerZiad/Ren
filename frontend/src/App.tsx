@@ -2,7 +2,7 @@ import { ChangeEvent, DragEvent, useCallback, useEffect, useState } from 'react'
 
 const API = 'http://127.0.0.1:8765/api'
 
-type Source = { id: string; filename: string; source_kind: string; status: string; error_message?: string; topics: string[] }
+type Source = { id: string; filename: string; source_kind: string; status: string; error_message?: string; topics: string[]; card_count: number }
 type Card = {
   id: string; title: string; body: string; topic_name?: string; review_count: number
   last_seen_at?: string; next_review_at: string; source: { id: string; filename: string }
@@ -91,7 +91,7 @@ function Inbox({ sources, busy, onImport, onRefresh }: { sources: Source[]; busy
       <label htmlFor="imports"><strong>{busy ? 'Adding your files…' : 'Drop files here or choose files'}</strong><span>PDF · TXT · Markdown</span></label>
     </div>
     <section className="source-section"><div className="section-head"><h2>What you dropped</h2><button className="quiet" onClick={() => void onRefresh()}>Refresh</button></div>
-      {sources.length === 0 ? <div className="empty">Nothing here yet. Start with a file you saved “for later.”</div> : <div className="source-list">{sources.map((source) => <div className="source-row" key={source.id}><span className={`dot ${source.status}`} /><div><strong>{source.filename}</strong><small>{source.status === 'ready' ? `${source.topics.length || 0} knowledge ideas found` : source.status}{source.error_message ? ` · ${source.error_message}` : ''}</small></div><a href={`${API}/sources/${source.id}/open`} target="_blank" rel="noopener noreferrer">Open</a></div>)}</div>}
+      {sources.length === 0 ? <div className="empty">Nothing here yet. Start with a file you saved “for later.”</div> : <div className="source-list">{sources.map((source) => <div className="source-row" key={source.id}><span className={`dot ${source.status}`} /><div><strong>{source.filename}</strong><small>{source.status === 'ready' ? `${source.card_count} knowledge card${source.card_count === 1 ? '' : 's'} created` : source.status}{source.error_message ? ` · ${source.error_message}` : ''}</small></div><a href={`${API}/sources/${source.id}/open`} target="_blank" rel="noopener noreferrer">Open</a></div>)}</div>}
     </section>
   </>
 }
