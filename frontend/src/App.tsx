@@ -16,6 +16,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 export default function App() {
   const [view, setView] = useState<'inbox' | 'knowledge' | 'remember'>('inbox')
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => (localStorage.getItem('ren-theme') === 'light' ? 'light' : 'dark'))
   const [sources, setSources] = useState<Source[]>([])
   const [cards, setCards] = useState<Card[]>([])
   const [remember, setRemember] = useState<Card[]>([])
@@ -33,6 +34,7 @@ export default function App() {
   }, [])
 
   useEffect(() => { void refresh(); const timer = window.setInterval(() => void refresh(), 4000); return () => window.clearInterval(timer) }, [refresh])
+  useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem('ren-theme', theme) }, [theme])
 
   async function importFiles(files: FileList | File[]) {
     if (!files.length) return
@@ -62,14 +64,15 @@ export default function App() {
   }
 
   return <main className="app-shell">
+    <div className="topo-field" aria-hidden="true"><i /><i /><i /><i /><i /></div>
     <aside className="sidebar">
-      <div className="brand"><span>R</span><div><strong>Ren</strong><small>Dump → Organize → Remind</small></div></div>
+      <div className="brand"><span className="brand-mark">R</span><div><strong>Ren</strong><small>Personal knowledge field</small></div></div>
       <nav>
-        <button className={view === 'inbox' ? 'active' : ''} onClick={() => setView('inbox')}>📥 Inbox <b>{sources.length}</b></button>
-        <button className={view === 'knowledge' ? 'active' : ''} onClick={() => setView('knowledge')}>🧠 My Knowledge <b>{cards.length}</b></button>
-        <button className={view === 'remember' ? 'active' : ''} onClick={() => setView('remember')}>🔔 Remember <b>{remember.length}</b></button>
+        <button className={view === 'inbox' ? 'active' : ''} onClick={() => setView('inbox')}><NavIcon name="inbox" />Inbox <b>{sources.length}</b></button>
+        <button className={view === 'knowledge' ? 'active' : ''} onClick={() => setView('knowledge')}><NavIcon name="knowledge" />Knowledge <b>{cards.length}</b></button>
+        <button className={view === 'remember' ? 'active' : ''} onClick={() => setView('remember')}><NavIcon name="remember" />Remember <b>{remember.length}</b></button>
       </nav>
-      <p className="rule"><strong>Ren’s rule</strong><br />Never make me organize anything.</p>
+      <div className="sidebar-bottom"><button className="theme-toggle" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}><span>{theme === 'dark' ? '☼' : '☾'}</span>{theme === 'dark' ? 'Light field' : 'Dark field'}</button><p className="rule"><strong>Ren’s rule</strong><br />Never make me organize anything.</p></div>
     </aside>
     <section className="page">
       {notice && <div className="notice">{notice}<button onClick={() => setNotice('')}>×</button></div>}
@@ -81,14 +84,20 @@ export default function App() {
   </main>
 }
 
+function NavIcon({ name }: { name: 'inbox' | 'knowledge' | 'remember' }) {
+  if (name === 'inbox') return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM4 14h5l1.5 2h3L15 14h5" /></svg>
+  if (name === 'knowledge') return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a8 8 0 0 0-4.7 14.5c.7.5.7 1.2.7 2h8c0-.8 0-1.5.7-2A8 8 0 0 0 12 3ZM9 22h6" /></svg>
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 22h4" /></svg>
+}
+
 function Inbox({ sources, busy, onImport, onRefresh }: { sources: Source[]; busy: boolean; onImport: (files: FileList | File[]) => Promise<void>; onRefresh: () => Promise<void> }) {
   const [dragging, setDragging] = useState(false)
   function drop(event: DragEvent<HTMLDivElement>) { event.preventDefault(); setDragging(false); void onImport(event.dataTransfer.files) }
   return <>
-    <header><p className="eyebrow">Your knowledge inbox</p><h1>Drop the mess here.</h1><p>Ren accepts PDFs, text files, and Markdown. It finds small pieces worth keeping—without touching your original files.</p></header>
+    <header><p className="eyebrow">01 / Capture</p><h1>Drop the mess here.</h1><p>Ren finds the small pieces worth keeping—without ever touching your original files.</p></header>
     <div className={`drop-zone ${dragging ? 'dragging' : ''}`} onDragOver={(event) => { event.preventDefault(); setDragging(true) }} onDragLeave={() => setDragging(false)} onDrop={drop}>
       <input id="imports" type="file" multiple accept=".pdf,.txt,.md,.markdown" onChange={(event: ChangeEvent<HTMLInputElement>) => { if (event.target.files?.length) void onImport(event.target.files); event.target.value = '' }} />
-      <label htmlFor="imports"><strong>{busy ? 'Adding your files…' : 'Drop files here or choose files'}</strong><span>PDF · TXT · Markdown</span></label>
+      <label htmlFor="imports"><span className="drop-symbol">+</span><strong>{busy ? 'Adding your files…' : 'Drop files here or choose files'}</strong><span>PDF · TXT · Markdown</span></label>
     </div>
     <section className="source-section"><div className="section-head"><h2>What you dropped</h2><button className="quiet" onClick={() => void onRefresh()}>Refresh</button></div>
       {sources.length === 0 ? <div className="empty">Nothing here yet. Start with a file you saved “for later.”</div> : <div className="source-list">{sources.map((source) => <div className="source-row" key={source.id}><span className={`dot ${source.status}`} /><div><strong>{source.filename}</strong><small>{source.status === 'ready' ? `${source.card_count} knowledge card${source.card_count === 1 ? '' : 's'} created` : source.status}{source.error_message ? ` · ${source.error_message}` : ''}</small></div><a href={`${API}/sources/${source.id}/open`} target="_blank" rel="noopener noreferrer">Open</a></div>)}</div>}
@@ -100,21 +109,21 @@ function Knowledge({ cards, onSelect }: { cards: Card[]; onSelect: (card: Card) 
   const [query, setQuery] = useState('')
   const visible = cards.filter((card) => `${card.title} ${card.body} ${card.source.filename}`.toLowerCase().includes(query.toLowerCase()))
   return <>
-    <header><p className="eyebrow">Small reusable knowledge</p><h1>My Knowledge</h1><p>These are the useful pieces Ren found inside your files. Search by concept, words, or source.</p></header>
-    <input className="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search what you have learned…" />
+    <header><p className="eyebrow">02 / Organize</p><h1>My Knowledge</h1><p>Small, reusable pieces extracted from your files. Search by concept, phrase, or source.</p></header>
+    <div className="search-wrap"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.4" /><path d="m16 16 4.3 4.3" /></svg><input className="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search what you have learned…" /></div>
     <CardGrid cards={visible} onSelect={onSelect} empty="Import a file and Ren will turn it into knowledge cards." />
   </>
 }
 
 function Remember({ cards, onSelect }: { cards: Card[]; onSelect: (card: Card) => void }) {
   return <>
-    <header><p className="eyebrow">Knowledge resurfacing</p><h1>What should I remember?</h1><p>{cards.length ? `Here ${cards.length === 1 ? 'is' : 'are'} ${cards.length} thing${cards.length === 1 ? '' : 's'} Ren thinks you may want to revisit.` : 'You are caught up. Ren will bring back new knowledge after your next import.'}</p></header>
+    <header><p className="eyebrow">03 / Resurface</p><h1>What should I remember?</h1><p>{cards.length ? `Here ${cards.length === 1 ? 'is' : 'are'} ${cards.length} thing${cards.length === 1 ? '' : 's'} Ren thinks you may want to revisit.` : 'You are caught up. Ren will bring back new knowledge after your next import.'}</p></header>
     <CardGrid cards={cards} onSelect={onSelect} empty="Nothing is due right now." />
   </>
 }
 
 function CardGrid({ cards, onSelect, empty }: { cards: Card[]; onSelect: (card: Card) => void; empty: string }) {
-  return cards.length === 0 ? <div className="empty">{empty}</div> : <div className="card-grid">{cards.map((card) => <button className="knowledge-card" key={card.id} onClick={() => onSelect(card)}><span className="tag">{card.topic_name || 'Knowledge'}</span><h2>{card.title}</h2><p>{card.body}</p><small>Source: {card.source.filename}</small></button>)}</div>
+  return cards.length === 0 ? <div className="empty">{empty}</div> : <div className="card-grid">{cards.map((card, index) => <button className="knowledge-card" key={card.id} onClick={() => onSelect(card)}><div className="card-top"><span className="tag">{card.topic_name || 'Knowledge'}</span><span className="card-index">{String(index + 1).padStart(2, '0')}</span></div><h2>{card.title}</h2><p>{card.body}</p><small>From {card.source.filename}<span>↗</span></small></button>)}</div>
 }
 
 function CardDetail({ card, onClose, onReview, onArchive }: { card: Card; onClose: () => void; onReview: (card: Card) => Promise<void>; onArchive: (card: Card) => Promise<void> }) {
