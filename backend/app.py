@@ -23,6 +23,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from backend.chat_service import complete_chat
+
 APP_NAME = "Ren"
 DEFAULT_DATA_DIR = Path(os.getenv("APPDATA", Path.home() / ".ren")) / "Ren"
 DATA_DIR = Path(os.getenv("REN_DATA_DIR", DEFAULT_DATA_DIR))
@@ -120,6 +122,43 @@ def initialize_database() -> None:
               UNIQUE(source_id, title)
             );
             CREATE INDEX IF NOT EXISTS idx_cards_review ON cards(status, next_review_at);
+            CREATE TABLE IF NOT EXISTS folders (
+              id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS chat_threads (
+              id TEXT PRIMARY KEY, title TEXT NOT NULL, folder_id TEXT REFERENCES folders(id) ON DELETE SET NULL,
+              incognito INTEGER NOT NULL DEFAULT 0, locked INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_chat_threads_updated ON chat_threads(updated_at DESC);
+            CREATE TABLE IF NOT EXISTS chat_messages (
+              id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+              role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
+              content TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'complete', model TEXT,
+              citations_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages(thread_id, created_at);
+            CREATE TABLE IF NOT EXISTS memories (
+              id TEXT PRIMARY KEY, content TEXT NOT NULL, category TEXT NOT NULL DEFAULT 'general',
+              source_thread_id TEXT REFERENCES chat_threads(id) ON DELETE SET NULL,
+              created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS artifacts (
+              id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+              title TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('document', 'html', 'chart')),
+              content TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'complete', share_id TEXT UNIQUE,
+              created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS integrations (
+              id TEXT PRIMARY KEY, name TEXT NOT NULL, endpoint TEXT NOT NULL,
+              auth_mode TEXT NOT NULL DEFAULT 'none', enabled INTEGER NOT NULL DEFAULT 0,
+              status TEXT NOT NULL DEFAULT 'not_connected', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS queued_messages (
+              id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+              content TEXT NOT NULL, created_at TEXT NOT NULL
+            );
             """
         )
 
@@ -445,13 +484,48 @@ class UrlCapture(BaseModel):
 
 
 class SettingsInput(BaseModel):
-    base_url: str = "https://api.openai.com/v1"
-    model: str = "gpt-4o-mini"
+    provider: str = "openrouter"
+    base_url: str = "https://openrouter.ai/api/v1"
+    model: str = "openai/gpt-4o-mini"
     api_key: str | None = None
 
 
 class QuestionInput(BaseModel):
     question: str = Field(min_length=2, max_length=2000)
+
+
+class ChatThreadInput(BaseModel):
+    title: str = Field(default="New chat", min_length=1, max_length=120)
+    incognito: bool = False
+    folder_id: str | None = None
+
+
+class ChatMessageInput(BaseModel):
+    content: str = Field(min_length=1, max_length=12000)
+    thinking: Literal["focused", "balanced", "creative"] = "balanced"
+    model: str | None = Field(default=None, max_length=160)
+
+
+class MemoryInput(BaseModel):
+    content: str = Field(min_length=1, max_length=2000)
+    category: str = Field(default="general", max_length=40)
+    source_thread_id: str | None = None
+
+
+class ArtifactInput(BaseModel):
+    title: str = Field(min_length=1, max_length=160)
+    kind: Literal["document", "html", "chart"] = "document"
+    content: str = Field(min_length=1, max_length=100000)
+
+
+class FolderInput(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+
+class IntegrationInput(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    endpoint: str = Field(min_length=3, max_length=2048)
+    auth_mode: Literal["none", "api_key", "oauth"] = "none"
 
 
 app = FastAPI(title="Ren Local Service", version="0.1.0")
@@ -511,11 +585,11 @@ def provider_answer(question: str, rows: list[sqlite3.Row]) -> str | None:
         f"Question: {question}\n\nSource excerpts:\n{context}"
     )
     payload = json.dumps({
-        "model": configured.get("model", "gpt-4o-mini"),
+        "model": configured.get("model", "openai/gpt-4o-mini"),
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.2,
     }).encode("utf-8")
-    base_url = configured.get("base_url", "https://api.openai.com/v1").rstrip("/")
+    base_url = configured.get("base_url", "https://openrouter.ai/api/v1").rstrip("/")
     request = urllib.request.Request(
         f"{base_url}/chat/completions", data=payload,
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, method="POST"
@@ -526,6 +600,40 @@ def provider_answer(question: str, rows: list[sqlite3.Row]) -> str | None:
         return data["choices"][0]["message"]["content"].strip()
     except (urllib.error.URLError, urllib.error.HTTPError, KeyError, IndexError, json.JSONDecodeError):
         return None
+
+
+def configured_provider() -> tuple[str, str]:
+    with db_connection() as db:
+        values = {row["key"]: row["value"] for row in db.execute("SELECT key, value FROM settings")}
+    # OpenRouter accepts this API shape; the setting remains compatible with a
+    # different OpenAI-compatible provider for a self-hosted future.
+    return values.get("base_url", "https://openrouter.ai/api/v1"), values.get("model", "openai/gpt-4o-mini")
+
+
+def chat_thread_payload(row: sqlite3.Row) -> dict[str, Any]:
+    payload = dict(row)
+    payload["incognito"] = bool(payload["incognito"])
+    payload["locked"] = bool(payload["locked"])
+    return payload
+
+
+def chat_message_payload(row: sqlite3.Row) -> dict[str, Any]:
+    payload = dict(row)
+    payload["citations"] = json.loads(payload.pop("citations_json", "[]"))
+    return payload
+
+
+def chat_context(query: str) -> tuple[str, list[dict[str, str]]]:
+    rows = query_rows(query, limit=6)
+    citations = [
+        {"source_id": row["source_id"], "filename": row["filename"], "anchor": row["anchor"] or "Source"}
+        for row in rows
+    ]
+    context = "\n\n".join(
+        f"[S{index}] {row['filename']} — {row['anchor'] or 'Source'}\n{row['text'][:1000]}"
+        for index, row in enumerate(rows, 1)
+    )
+    return context, citations
 
 
 def source_payload(row: sqlite3.Row) -> dict[str, Any]:
@@ -567,18 +675,207 @@ def health() -> dict[str, Any]:
 def get_settings() -> dict[str, Any]:
     with db_connection() as db:
         values = {row["key"]: row["value"] for row in db.execute("SELECT key, value FROM settings")}
-    return {"base_url": values.get("base_url", "https://api.openai.com/v1"), "model": values.get("model", "gpt-4o-mini"), "api_key_configured": api_key_available()}
+    return {
+        "provider": values.get("provider", "openrouter"),
+        "base_url": values.get("base_url", "https://openrouter.ai/api/v1"),
+        "model": values.get("model", "openai/gpt-4o-mini"),
+        "api_key_configured": api_key_available(),
+    }
 
 
 @app.put("/api/settings")
 def save_settings(payload: SettingsInput) -> dict[str, Any]:
     with db_connection() as db:
-        for key, value in {"base_url": payload.base_url.rstrip("/"), "model": payload.model}.items():
+        for key, value in {"provider": payload.provider.strip() or "openrouter", "base_url": payload.base_url.rstrip("/"), "model": payload.model.strip()}.items():
             db.execute("INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
     vault_saved = None
     if payload.api_key:
         vault_saved = store_api_key(payload.api_key)
-    return {"ok": True, "vault_saved": vault_saved, "api_key_configured": api_key_available()}
+    return {
+        "provider": payload.provider.strip() or "openrouter",
+        "base_url": payload.base_url.rstrip("/"),
+        "model": payload.model.strip(),
+        "api_key_configured": api_key_available(),
+        "vault_saved": vault_saved,
+    }
+
+
+@app.get("/api/platform/capabilities")
+def platform_capabilities() -> dict[str, Any]:
+    """Honest feature availability: no account or provider is assumed."""
+    return {
+        "chat": True,
+        "knowledge": True,
+        "memory": True,
+        "artifacts": True,
+        "folders": True,
+        "incognito": True,
+        "openrouter": api_key_available(),
+        "mcp": False,
+        "web_search": False,
+        "voice": False,
+        "image_generation": False,
+        "sharing": False,
+        "locked_chats": False,
+    }
+
+
+@app.get("/api/chat/threads")
+def list_chat_threads() -> list[dict[str, Any]]:
+    with db_connection() as db:
+        rows = db.execute("SELECT * FROM chat_threads ORDER BY updated_at DESC").fetchall()
+    return [chat_thread_payload(row) for row in rows]
+
+
+@app.post("/api/chat/threads")
+def create_chat_thread(payload: ChatThreadInput) -> dict[str, Any]:
+    thread_id = str(uuid.uuid4())
+    timestamp = now()
+    with db_connection() as db:
+        if payload.folder_id and not db.execute("SELECT 1 FROM folders WHERE id=?", (payload.folder_id,)).fetchone():
+            raise HTTPException(422, "That folder no longer exists.")
+        db.execute(
+            """INSERT INTO chat_threads(id, title, folder_id, incognito, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (thread_id, payload.title.strip(), payload.folder_id, int(payload.incognito), timestamp, timestamp),
+        )
+        row = db.execute("SELECT * FROM chat_threads WHERE id=?", (thread_id,)).fetchone()
+    return chat_thread_payload(row)
+
+
+@app.get("/api/chat/threads/{thread_id}")
+def get_chat_thread(thread_id: str) -> dict[str, Any]:
+    with db_connection() as db:
+        thread = db.execute("SELECT * FROM chat_threads WHERE id=?", (thread_id,)).fetchone()
+        if not thread:
+            raise HTTPException(404, "Chat not found")
+        messages = db.execute("SELECT * FROM chat_messages WHERE thread_id=? ORDER BY created_at", (thread_id,)).fetchall()
+    return {"thread": chat_thread_payload(thread), "messages": [chat_message_payload(row) for row in messages]}
+
+
+@app.delete("/api/chat/threads/{thread_id}")
+def delete_chat_thread(thread_id: str) -> dict[str, bool]:
+    with db_connection() as db:
+        deleted = db.execute("DELETE FROM chat_threads WHERE id=?", (thread_id,)).rowcount
+    if not deleted:
+        raise HTTPException(404, "Chat not found")
+    return {"deleted": True}
+
+
+@app.post("/api/chat/threads/{thread_id}/messages")
+def send_chat_message(thread_id: str, payload: ChatMessageInput) -> dict[str, Any]:
+    text = payload.content.strip()
+    with db_connection() as db:
+        thread = db.execute("SELECT * FROM chat_threads WHERE id=?", (thread_id,)).fetchone()
+        if not thread:
+            raise HTTPException(404, "Chat not found")
+        if thread["locked"]:
+            raise HTTPException(423, "Locked chats are not available in the local Ren build yet.")
+        timestamp = now()
+        user_id = str(uuid.uuid4())
+        db.execute(
+            "INSERT INTO chat_messages(id, thread_id, role, content, status, created_at) VALUES (?, ?, 'user', ?, 'complete', ?)",
+            (user_id, thread_id, text, timestamp),
+        )
+        conversation_rows = db.execute("SELECT role, content FROM chat_messages WHERE thread_id=? ORDER BY created_at DESC LIMIT 16", (thread_id,)).fetchall()
+        memories = [] if thread["incognito"] else [row["content"] for row in db.execute("SELECT content FROM memories ORDER BY updated_at DESC LIMIT 8")]
+    context, citations = chat_context(text)
+    base_url, default_model = configured_provider()
+    completion = complete_chat(
+        api_key=get_api_key(),
+        base_url=base_url,
+        model=payload.model or default_model,
+        conversation=[{"role": row["role"], "content": row["content"]} for row in reversed(conversation_rows)],
+        context=context,
+        memories=memories,
+        thinking=payload.thinking,
+    )
+    assistant_id = str(uuid.uuid4())
+    with db_connection() as db:
+        db.execute(
+            """INSERT INTO chat_messages(id, thread_id, role, content, status, model, citations_json, created_at)
+               VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?)""",
+            (assistant_id, thread_id, completion.content, "complete" if completion.error is None else "failed", payload.model or default_model, json.dumps(citations), now()),
+        )
+        db.execute("UPDATE chat_threads SET updated_at=? WHERE id=?", (now(), thread_id))
+        assistant = db.execute("SELECT * FROM chat_messages WHERE id=?", (assistant_id,)).fetchone()
+    return chat_message_payload(assistant) | {"provider_used": completion.provider_used, "error": completion.error}
+
+
+@app.get("/api/memories")
+def list_memories() -> list[dict[str, Any]]:
+    with db_connection() as db:
+        return [dict(row) for row in db.execute("SELECT * FROM memories ORDER BY updated_at DESC")]
+
+
+@app.post("/api/memories")
+def create_memory(payload: MemoryInput) -> dict[str, Any]:
+    memory_id = str(uuid.uuid4())
+    timestamp = now()
+    with db_connection() as db:
+        db.execute("INSERT INTO memories(id, content, category, source_thread_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", (memory_id, payload.content.strip(), payload.category.strip(), payload.source_thread_id, timestamp, timestamp))
+        row = db.execute("SELECT * FROM memories WHERE id=?", (memory_id,)).fetchone()
+    return dict(row)
+
+
+@app.delete("/api/memories/{memory_id}")
+def delete_memory(memory_id: str) -> dict[str, bool]:
+    with db_connection() as db:
+        deleted = db.execute("DELETE FROM memories WHERE id=?", (memory_id,)).rowcount
+    if not deleted:
+        raise HTTPException(404, "Memory not found")
+    return {"deleted": True}
+
+
+@app.get("/api/chat/threads/{thread_id}/artifacts")
+def list_artifacts(thread_id: str) -> list[dict[str, Any]]:
+    with db_connection() as db:
+        return [dict(row) for row in db.execute("SELECT * FROM artifacts WHERE thread_id=? ORDER BY updated_at DESC", (thread_id,))]
+
+
+@app.post("/api/chat/threads/{thread_id}/artifacts")
+def create_artifact(thread_id: str, payload: ArtifactInput) -> dict[str, Any]:
+    artifact_id = str(uuid.uuid4())
+    timestamp = now()
+    with db_connection() as db:
+        if not db.execute("SELECT 1 FROM chat_threads WHERE id=?", (thread_id,)).fetchone():
+            raise HTTPException(404, "Chat not found")
+        db.execute("INSERT INTO artifacts(id, thread_id, title, kind, content, share_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (artifact_id, thread_id, payload.title.strip(), payload.kind, payload.content, uuid.uuid4().hex[:10], timestamp, timestamp))
+        row = db.execute("SELECT * FROM artifacts WHERE id=?", (artifact_id,)).fetchone()
+    return dict(row)
+
+
+@app.post("/api/folders")
+def create_folder(payload: FolderInput) -> dict[str, Any]:
+    folder_id = str(uuid.uuid4())
+    timestamp = now()
+    with db_connection() as db:
+        position = db.execute("SELECT COUNT(*) AS total FROM folders").fetchone()["total"]
+        db.execute("INSERT INTO folders(id, name, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?)", (folder_id, payload.name.strip(), position, timestamp, timestamp))
+        row = db.execute("SELECT * FROM folders WHERE id=?", (folder_id,)).fetchone()
+    return dict(row)
+
+
+@app.get("/api/folders")
+def list_folders() -> list[dict[str, Any]]:
+    with db_connection() as db:
+        return [dict(row) for row in db.execute("SELECT * FROM folders ORDER BY position, name")]
+
+
+@app.post("/api/integrations")
+def register_integration(payload: IntegrationInput) -> dict[str, Any]:
+    integration_id = str(uuid.uuid4())
+    timestamp = now()
+    with db_connection() as db:
+        db.execute("INSERT INTO integrations(id, name, endpoint, auth_mode, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", (integration_id, payload.name.strip(), payload.endpoint.strip(), payload.auth_mode, timestamp, timestamp))
+        row = db.execute("SELECT * FROM integrations WHERE id=?", (integration_id,)).fetchone()
+    return dict(row)
+
+
+@app.get("/api/integrations")
+def list_integrations() -> list[dict[str, Any]]:
+    with db_connection() as db:
+        return [dict(row) for row in db.execute("SELECT * FROM integrations ORDER BY updated_at DESC")]
 
 
 @app.post("/api/captures/files")

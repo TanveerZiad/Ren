@@ -1,4 +1,6 @@
 import { ChangeEvent, DragEvent, useCallback, useEffect, useState } from 'react'
+import { ChatWorkspace } from './components/chat-workspace'
+import { SettingsWorkspace } from './components/settings-workspace'
 
 const API = 'http://127.0.0.1:8765/api'
 
@@ -15,7 +17,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export default function App() {
-  const [view, setView] = useState<'inbox' | 'knowledge' | 'remember'>('inbox')
+  const [view, setView] = useState<'chat' | 'inbox' | 'knowledge' | 'remember' | 'settings'>('inbox')
   const [theme, setTheme] = useState<'dark' | 'light'>(() => (localStorage.getItem('ren-theme') === 'light' ? 'light' : 'dark'))
   const [sources, setSources] = useState<Source[]>([])
   const [cards, setCards] = useState<Card[]>([])
@@ -68,25 +70,31 @@ export default function App() {
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark">R</span><div><strong>Ren</strong><small>Personal knowledge field</small></div></div>
       <nav>
+        <button className={view === 'chat' ? 'active' : ''} onClick={() => setView('chat')}><NavIcon name="chat" />Chat</button>
         <button className={view === 'inbox' ? 'active' : ''} onClick={() => setView('inbox')}><NavIcon name="inbox" />Inbox <b>{sources.length}</b></button>
         <button className={view === 'knowledge' ? 'active' : ''} onClick={() => setView('knowledge')}><NavIcon name="knowledge" />Knowledge <b>{cards.length}</b></button>
         <button className={view === 'remember' ? 'active' : ''} onClick={() => setView('remember')}><NavIcon name="remember" />Remember <b>{remember.length}</b></button>
+        <button className={view === 'settings' ? 'active' : ''} onClick={() => setView('settings')}><NavIcon name="settings" />Settings</button>
       </nav>
       <div className="sidebar-bottom"><button className="theme-toggle" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}><span>{theme === 'dark' ? '☼' : '☾'}</span>{theme === 'dark' ? 'Light field' : 'Dark field'}</button><p className="rule"><strong>Ren’s rule</strong><br />Never make me organize anything.</p></div>
     </aside>
     <section className="page">
       {notice && <div className="notice">{notice}<button onClick={() => setNotice('')}>×</button></div>}
+      {view === 'chat' && <ChatWorkspace onNotice={setNotice} />}
       {view === 'inbox' && <Inbox sources={sources} busy={busy} onImport={importFiles} onRefresh={refresh} />}
       {view === 'knowledge' && <Knowledge cards={cards} onSelect={setSelected} />}
       {view === 'remember' && <Remember cards={remember} onSelect={setSelected} />}
+      {view === 'settings' && <SettingsWorkspace onNotice={setNotice} />}
     </section>
     {selected && <CardDetail card={selected} onClose={() => setSelected(null)} onReview={review} onArchive={archive} />}
   </main>
 }
 
-function NavIcon({ name }: { name: 'inbox' | 'knowledge' | 'remember' }) {
+function NavIcon({ name }: { name: 'chat' | 'inbox' | 'knowledge' | 'remember' | 'settings' }) {
+  if (name === 'chat') return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-8 7.5 8.5 8.5 0 0 1-3.2-.6L4 20l1.4-3.7A7.2 7.2 0 0 1 4 11.5 7.5 7.5 0 0 1 12 4a7.5 7.5 0 0 1 8 7.5Z" /></svg>
   if (name === 'inbox') return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM4 14h5l1.5 2h3L15 14h5" /></svg>
   if (name === 'knowledge') return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a8 8 0 0 0-4.7 14.5c.7.5.7 1.2.7 2h8c0-.8 0-1.5.7-2A8 8 0 0 0 12 3ZM9 22h6" /></svg>
+  if (name === 'settings') return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.8 1.8 0 0 0 .36 2l.06.06-2.1 2.1-.06-.06a1.8 1.8 0 0 0-2-.36 1.8 1.8 0 0 0-1.1 1.65v.11h-3v-.11A1.8 1.8 0 0 0 10.5 18.7a1.8 1.8 0 0 0-2 .36l-.06.06-2.1-2.1.06-.06a1.8 1.8 0 0 0 .36-2 1.8 1.8 0 0 0-1.65-1.1H5v-3h.11A1.8 1.8 0 0 0 6.8 9.8a1.8 1.8 0 0 0-.36-2l-.06-.06 2.1-2.1.06.06a1.8 1.8 0 0 0 2 .36A1.8 1.8 0 0 0 11.6 4.4v-.11h3v.11a1.8 1.8 0 0 0 1.1 1.65 1.8 1.8 0 0 0 2-.36l.06-.06 2.1 2.1-.06.06a1.8 1.8 0 0 0-.36 2 1.8 1.8 0 0 0 1.65 1.1h.11v3h-.11A1.8 1.8 0 0 0 19.4 15Z" /></svg>
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 22h4" /></svg>
 }
 

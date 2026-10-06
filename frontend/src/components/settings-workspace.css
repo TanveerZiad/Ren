@@ -1,0 +1,14 @@
+.settings-workspace { max-width: 48rem; padding-bottom: 2rem; }
+.settings-workspace header { padding-top: 2.5rem; }
+.settings-card { display: grid; gap: 1rem; margin-top: 2rem; padding: 1.3rem; border: 1px solid var(--line); border-radius: 1rem; background: color-mix(in srgb, var(--panel) 90%, transparent); }
+.settings-card label { display: grid; gap: .45rem; color: var(--text); font-size: .82rem; font-weight: 700; }
+.settings-card label small { color: var(--muted); font-size: .75rem; font-weight: 400; }
+.settings-card input { width: 100%; box-sizing: border-box; padding: .75rem .8rem; border: 1px solid var(--line); border-radius: .6rem; outline: 0; background: transparent; color: var(--text); font: inherit; }
+.settings-card input:focus { border-color: var(--accent); }
+.settings-actions { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: .5rem; }
+.settings-actions a { color: var(--accent); font-size: .83rem; text-decoration: none; }
+.settings-note { margin-top: 1rem; padding: 1.1rem 1.2rem; border-left: 2px solid var(--accent); background: color-mix(in srgb, var(--panel) 65%, transparent); color: var(--muted); }
+.settings-note strong { color: var(--text); }
+.settings-note p { margin: .35rem 0 1rem; line-height: 1.55; }
+.settings-note p:last-child { margin-bottom: 0; }
+@media (max-width: 520px) { .settings-actions { align-items: flex-start; flex-direction: column; } }
