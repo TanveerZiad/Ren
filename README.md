@@ -2,28 +2,97 @@
 
 Ren is a local-first knowledge inbox: **Dump → Organize → Remind**. Drop a PDF, TXT, or Markdown file; Ren keeps a safe managed copy, turns useful concepts into small source-backed cards, and resurfaces cards you have not reviewed.
 
-## Development
+## Project Run Guide
 
-Prerequisites: Python 3.11+ and Node 20+. Rust/Cargo is required only to package the Tauri desktop executable.
+### Prerequisites
+
+- **Python**: 3.11 or higher
+- **Node.js**: 20.x or higher (with npm)
+- *(Optional)* **Rust & Cargo**: Required only if packaging or running the Tauri desktop app.
+
+---
+
+### Method 1: Quick Start (Single Command)
+
+If you are using Windows PowerShell, you can launch both the backend and frontend development servers simultaneously with:
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-python -m uvicorn backend.app:app --reload --port 8765
+./run-dev.ps1
 ```
 
-In a second terminal:
+- **Backend API:** [http://127.0.0.1:8765](http://127.0.0.1:8765)
+- **Frontend App:** [http://localhost:5173](http://localhost:5173)
+
+---
+
+### Method 2: Step-by-Step Manual Run
+
+Run each service in its own terminal to observe logs independently.
+
+#### 1. Backend (FastAPI + Uvicorn)
+
+Open your first terminal in the repository root:
 
 ```powershell
+# Create virtual environment (first time only)
+python -m venv .venv
+
+# Activate the virtual environment
+# Windows PowerShell:
+.\.venv\Scripts\Activate.ps1
+# Windows Command Prompt:
+# .venv\Scripts\activate.bat
+# macOS / Linux:
+# source .venv/bin/activate
+
+# Install backend dependencies
+pip install -r requirements.txt
+
+# Run the backend API server
+python -m uvicorn backend.app:app --host 127.0.0.1 --port 8765 --reload
+```
+
+- Backend API endpoint: `http://127.0.0.1:8765`
+- Interactive API Documentation (Swagger UI): `http://127.0.0.1:8765/docs`
+
+#### 2. Frontend (Vite + React)
+
+Open a second terminal in the repository root:
+
+```powershell
+# Navigate to the frontend directory
 cd frontend
+
+# Install dependencies (first time only)
 npm install
+
+# Start the Vite development server
 npm run dev
 ```
 
-Open the shown local URL. The development UI expects the API at `http://127.0.0.1:8765`.
+- Open [http://localhost:5173](http://localhost:5173) in your web browser.
 
-Run `./run-dev.ps1` instead to start both processes from the repository root.
+---
+
+### Running the Test Suite
+
+To verify backend endpoints and database logic:
+
+```powershell
+# Activate your virtual environment first, then run:
+python -m unittest backend/test_app.py
+```
+
+---
+
+### Running as Desktop App (Tauri)
+
+Once Rust and the Tauri prerequisites are installed on your machine:
+
+```powershell
+cd frontend
+npm run tauri:dev
+```
 
 ## What Ren does now
 

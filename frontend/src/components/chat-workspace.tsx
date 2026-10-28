@@ -13,6 +13,36 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 
+function renderContentWithCitations(content: string, citations?: Citation[]) {
+  if (!citations || citations.length === 0) {
+    return content
+  }
+  const parts = content.split(/(\[S\d+\])/g)
+  return parts.map((part, index) => {
+    const match = part.match(/^\[S(\d+)\]$/)
+    if (match) {
+      const citationIndex = parseInt(match[1], 10) - 1
+      const citation = citations[citationIndex]
+      if (citation) {
+        const anchorLabel = citation.anchor ? ` — ${citation.anchor}` : ''
+        return (
+          <a
+            key={index}
+            className="inline-citation"
+            href={`${API}/sources/${citation.source_id}/open`}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`Open ${citation.filename}${anchorLabel}`}
+          >
+            {part}
+          </a>
+        )
+      }
+    }
+    return part
+  })
+}
+
 export function ChatWorkspace({ onNotice }: { onNotice: (message: string) => void }) {
   const [threads, setThreads] = useState<Thread[]>([])
   const [thread, setThread] = useState<Thread | null>(null)
@@ -63,6 +93,40 @@ export function ChatWorkspace({ onNotice }: { onNotice: (message: string) => voi
 
   return <div className="chat-workspace">
     <aside className="chat-rail"><div className="chat-rail-head"><h2>Chats</h2><button className="icon-button" aria-label="New chat" onClick={() => void createThread()}>+</button></div><button className="incognito-button" onClick={() => void createThread(true)}>◌ New incognito chat</button><div className="thread-list">{threads.length === 0 ? <p>Start a chat to ask Ren about your knowledge.</p> : threads.map((item) => <button key={item.id} className={item.id === thread?.id ? 'thread active' : 'thread'} onClick={() => void openThread(item)}><span>{item.incognito ? '◌ ' : ''}{item.title}</span><small>{new Date(item.updated_at).toLocaleDateString()}</small></button>)}</div></aside>
-    <section className="chat-pane"><header><p className="eyebrow">Ren / Grounded chat</p><h1>{thread?.incognito ? 'Incognito chat' : 'Ask Ren'}</h1><p>{thread?.incognito ? 'This thread stays separate from Ren’s long-term memory.' : 'Chat with the context you imported. Ren cites the source it uses.'}</p></header><div className="message-list">{messages.length === 0 ? <div className="chat-empty"><span>◌</span><strong>What are you trying to understand?</strong><p>Ask about an imported concept, compare ideas, or turn a thought into a next step.</p></div> : messages.map((message) => <article key={message.id} className={`message ${message.role}`}><div className="message-label">{message.role === 'user' ? 'You' : 'Ren'}</div><p>{message.content}</p>{message.citations.length > 0 && <div className="message-sources">{message.citations.map((citation, index) => <a key={`${citation.source_id}-${index}`} href={`${API}/sources/${citation.source_id}/open`} target="_blank" rel="noopener noreferrer">[S{index + 1}] {citation.filename}</a>)}</div>}</article>)}</div><form className="chat-composer" onSubmit={send}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Ask Ren about your knowledge…" rows={3} /><div><select value={thinking} onChange={(event) => setThinking(event.target.value as typeof thinking)} aria-label="Thinking level"><option value="focused">Focused</option><option value="balanced">Balanced</option><option value="creative">Creative</option></select><button className="primary" disabled={sending || !draft.trim()}>{sending ? 'Thinking…' : 'Send ↗'}</button></div></form></section>
+    <section className="chat-pane"><header><p className="eyebrow">Ren / Grounded chat</p><h1>{thread?.incognito ? 'Incognito chat' : 'Ask Ren'}</h1><p>{thread?.incognito ? 'This thread stays separate from Ren’s long-term memory.' : 'Chat with the context you imported. Ren cites the source it uses.'}</p></header>      <div className="message-list">
+        {messages.length === 0 ? (
+          <div className="chat-empty">
+            <span>◌</span>
+            <strong>What are you trying to understand?</strong>
+            <p>Ask about an imported concept, compare ideas, or turn a thought into a next step.</p>
+          </div>
+        ) : (
+          messages.map((message) => (
+            <article key={message.id} className={`message ${message.role}`}>
+              <div className="message-label">{message.role === 'user' ? 'You' : 'Ren'}</div>
+              <p>{renderContentWithCitations(message.content, message.citations)}</p>
+              {message.citations && message.citations.length > 0 && (
+                <div className="message-sources">
+                  {message.citations.map((citation, index) => {
+                    const anchorLabel = citation.anchor ? ` — ${citation.anchor}` : ''
+                    return (
+                      <a
+                        key={`${citation.source_id}-${index}`}
+                        className="citation-pill"
+                        href={`${API}/sources/${citation.source_id}/open`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={`Open ${citation.filename}${anchorLabel}`}
+                      >
+                        [S{index + 1}] {citation.filename}{anchorLabel}
+                      </a>
+                    )
+                  })}
+                </div>
+              )}
+            </article>
+          ))
+        )}
+      </div><form className="chat-composer" onSubmit={send}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Ask Ren about your knowledge…" rows={3} /><div><select value={thinking} onChange={(event) => setThinking(event.target.value as typeof thinking)} aria-label="Thinking level"><option value="focused">Focused</option><option value="balanced">Balanced</option><option value="creative">Creative</option></select><button className="primary" disabled={sending || !draft.trim()}>{sending ? 'Thinking…' : 'Send ↗'}</button></div></form></section>
   </div>
 }

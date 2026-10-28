@@ -34,8 +34,55 @@
 .message.user { justify-self: end; background: color-mix(in srgb, var(--accent) 15%, var(--panel)); }
 .message-label { margin-bottom: .45rem; color: var(--muted); font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .message p { margin: 0; white-space: pre-wrap; line-height: 1.6; }
-.message-sources { display: flex; flex-wrap: wrap; gap: .45rem; margin-top: .85rem; }
-.message-sources a { color: var(--accent); font-size: .78rem; text-decoration: none; }
+.message-sources {
+  display: flex;
+  flex-direction: column;
+  gap: .4rem;
+  margin-top: .85rem;
+  padding-top: .75rem;
+  border-top: 1px dashed var(--line);
+}
+.message-sources .citation-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  width: fit-content;
+  max-width: 100%;
+  padding: .3rem .65rem;
+  border: 1px solid var(--line);
+  border-radius: .55rem;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  color: var(--accent);
+  font-size: .82rem;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: all .15s ease;
+}
+.message-sources .citation-pill:hover {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  border-color: var(--accent);
+  color: var(--text);
+}
+.inline-citation {
+  display: inline-block;
+  margin: 0 .15rem;
+  padding: .05rem .35rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: .35rem;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  font-size: .82em;
+  font-weight: 600;
+  text-decoration: none;
+  vertical-align: baseline;
+  transition: all .15s ease;
+}
+.inline-citation:hover {
+  background: var(--accent);
+  color: #fff;
+}
 .chat-empty { place-self: center; max-width: 28rem; padding: 2rem; color: var(--muted); text-align: center; }
 .chat-empty span { display: block; margin-bottom: .5rem; color: var(--accent); font-size: 2rem; }
 .chat-empty strong { color: var(--text); }

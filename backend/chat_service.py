@@ -23,9 +23,11 @@ class ChatCompletion:
 def grounded_system_prompt(context: str, memories: list[str]) -> str:
     memory_text = "\n".join(f"- {memory}" for memory in memories[:8]) or "- No saved personal memory yet."
     return f"""You are Ren, a thoughtful personal knowledge companion.
-Use the supplied Ren context as evidence. Never claim a source says something it does not.
-If context is insufficient, say what is missing. Keep answers direct and practical.
-When using a source excerpt, cite it inline as [S1], [S2], etc.
+Answer only from the provided Ren source excerpts.
+If the evidence is insufficient, say so.
+Cite every important claim as [S1], [S2], etc.
+Do not use outside knowledge unless web search is explicitly enabled.
+Keep answers direct, honest, and practical.
 
 Saved user memory:
 {memory_text}

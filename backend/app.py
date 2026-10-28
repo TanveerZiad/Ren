@@ -24,6 +24,13 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from backend.chat_service import complete_chat
+from backend.rag_service import (
+    build_grounded_context_and_citations,
+    chunk_source_document,
+    compute_content_hash,
+    embed_chunks_for_source,
+    retrieve_hybrid_chunks,
+)
 
 APP_NAME = "Ren"
 DEFAULT_DATA_DIR = Path(os.getenv("APPDATA", Path.home() / ".ren")) / "Ren"
@@ -74,9 +81,20 @@ def initialize_database() -> None:
             );
             CREATE TABLE IF NOT EXISTS chunks (
               id TEXT PRIMARY KEY, source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-              ordinal INTEGER NOT NULL, text TEXT NOT NULL, anchor TEXT, created_at TEXT NOT NULL
+              ordinal INTEGER NOT NULL, text TEXT NOT NULL, anchor TEXT, content_hash TEXT, created_at TEXT NOT NULL
             );
+            CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source_id);
             CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(chunk_id UNINDEXED, text);
+            CREATE TABLE IF NOT EXISTS embeddings (
+              id TEXT PRIMARY KEY,
+              chunk_id TEXT NOT NULL UNIQUE REFERENCES chunks(id) ON DELETE CASCADE,
+              model TEXT NOT NULL,
+              dimensions INTEGER NOT NULL,
+              vector_json TEXT NOT NULL,
+              content_hash TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_embeddings_hash ON embeddings(content_hash);
             CREATE TABLE IF NOT EXISTS topics (
               id TEXT PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE UNIQUE,
               summary TEXT DEFAULT '', created_at TEXT NOT NULL
@@ -161,6 +179,14 @@ def initialize_database() -> None:
             );
             """
         )
+        try:
+            db.execute("ALTER TABLE chunks ADD COLUMN content_hash TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            db.execute("CREATE INDEX IF NOT EXISTS idx_chunks_hash ON chunks(content_hash)")
+        except sqlite3.OperationalError:
+            pass
 
 
 class StripHtml(HTMLParser):
@@ -268,6 +294,12 @@ def update_job(db: sqlite3.Connection, job_id: str, status: str, stage: str, err
     db.execute("UPDATE processing_jobs SET status=?, stage=?, error_message=?, updated_at=? WHERE id=?", (status, stage, error, now(), job_id))
 
 
+def configured_embedding_provider() -> tuple[str, str]:
+    with db_connection() as db:
+        values = {row["key"]: row["value"] for row in db.execute("SELECT key, value FROM settings")}
+    return values.get("base_url", "https://openrouter.ai/api/v1"), values.get("embedding_model", "text-embedding-3-small")
+
+
 def process_source(source_id: str, job_id: str) -> None:
     affected_topics: list[str] = []
     with db_connection() as db:
@@ -281,21 +313,66 @@ def process_source(source_id: str, job_id: str) -> None:
             if not text:
                 raise ValueError("No readable text was found in this source.")
             db.execute("UPDATE sources SET extracted_text=?, status='processing', updated_at=? WHERE id=?", (text, now(), source_id))
+
             update_job(db, job_id, "processing", "chunking")
+            managed_path = Path(source["managed_path"]) if source["managed_path"] else None
+            chunks_data = chunk_source_document(managed_path, text, source["source_kind"])
+            if not chunks_data:
+                chunks_data = [{"ordinal": 1, "text": text, "anchor": "Chunk 1", "content_hash": compute_content_hash(text)}]
+
+            base_url, embedding_model = configured_embedding_provider()
+            all_hashes = list({c["content_hash"] for c in chunks_data})
+            known_vectors: dict[str, tuple[int, str]] = {}
+            if all_hashes:
+                placeholders = ",".join("?" for _ in all_hashes)
+                existing_rows = db.execute(
+                    f"SELECT content_hash, dimensions, vector_json FROM embeddings WHERE content_hash IN ({placeholders}) AND model=?",
+                    all_hashes + [embedding_model],
+                ).fetchall()
+                for r in existing_rows:
+                    known_vectors[r["content_hash"]] = (r["dimensions"], r["vector_json"])
+
             db.execute("DELETE FROM chunks_fts WHERE chunk_id IN (SELECT id FROM chunks WHERE source_id=?)", (source_id,))
             db.execute("DELETE FROM chunks WHERE source_id=?", (source_id,))
-            for ordinal, chunk_text in enumerate(make_chunks(text), start=1):
+
+            created_chunks = []
+            for c in chunks_data:
                 chunk_id = str(uuid.uuid4())
-                anchor = f"Section {ordinal}"
-                db.execute("INSERT INTO chunks(id, source_id, ordinal, text, anchor, created_at) VALUES (?, ?, ?, ?, ?, ?)", (chunk_id, source_id, ordinal, chunk_text, anchor, now()))
-                db.execute("INSERT INTO chunks_fts(chunk_id, text) VALUES (?, ?)", (chunk_id, chunk_text))
+                db.execute(
+                    "INSERT INTO chunks(id, source_id, ordinal, text, anchor, content_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (chunk_id, source_id, c["ordinal"], c["text"], c["anchor"], c["content_hash"], now()),
+                )
+                db.execute("INSERT INTO chunks_fts(chunk_id, text) VALUES (?, ?)", (chunk_id, c["text"]))
+                created_chunks.append({
+                    "id": chunk_id,
+                    "chunk_id": chunk_id,
+                    "source_id": source_id,
+                    "ordinal": c["ordinal"],
+                    "text": c["text"],
+                    "anchor": c["anchor"],
+                    "content_hash": c["content_hash"],
+                })
+
+            update_job(db, job_id, "processing", "embedding")
+            newly, reused, embed_error = embed_chunks_for_source(
+                db=db,
+                chunks=created_chunks,
+                known_vectors=known_vectors,
+                base_url=base_url,
+                api_key=get_api_key(),
+                model=embedding_model,
+            )
+
             update_job(db, job_id, "processing", "suggesting topics")
             for topic_name in suggested_topics(source["filename"], text):
                 topic_id = get_or_create_topic(db, topic_name)
                 affected_topics.append(topic_id)
                 db.execute("INSERT OR REPLACE INTO source_topics(source_id, topic_id, confidence) VALUES (?, ?, ?)", (source_id, topic_id, 0.65))
-            db.execute("UPDATE sources SET status='ready', updated_at=? WHERE id=?", (now(), source_id))
-            update_job(db, job_id, "completed", "ready")
+            db.execute("UPDATE sources SET status='ready', error_message=NULL, updated_at=? WHERE id=?", (now(), source_id))
+            if embed_error:
+                update_job(db, job_id, "completed", "ready", embed_error)
+            else:
+                update_job(db, job_id, "completed", "ready")
         except Exception as error:
             db.execute("UPDATE sources SET status='failed', error_message=?, updated_at=? WHERE id=?", (str(error), now(), source_id))
             update_job(db, job_id, "failed", "failed", str(error))
@@ -415,24 +492,17 @@ def review_timestamp(review_count: int) -> str:
     return (datetime.now(UTC) + timedelta(days=days)).isoformat()
 
 
-def query_rows(query: str, limit: int = 8) -> list[sqlite3.Row]:
-    terms = re.findall(r"[\w-]{2,}", query)
-    if not terms:
-        return []
-    match = " OR ".join(f'"{term}"' for term in terms[:12])
+def query_rows(query: str, limit: int = 6) -> list[dict[str, Any]]:
+    base_url, embedding_model = configured_embedding_provider()
     with db_connection() as db:
-        try:
-            return db.execute(
-                """SELECT c.*, s.filename FROM chunks_fts f JOIN chunks c ON c.id=f.chunk_id
-                   JOIN sources s ON s.id=c.source_id WHERE chunks_fts MATCH ?
-                   ORDER BY bm25(chunks_fts) LIMIT ?""",
-                (match, limit),
-            ).fetchall()
-        except sqlite3.OperationalError:
-            return db.execute(
-                "SELECT c.*, s.filename FROM chunks c JOIN sources s ON s.id=c.source_id WHERE c.text LIKE ? LIMIT ?",
-                (f"%{query}%", limit),
-            ).fetchall()
+        return retrieve_hybrid_chunks(
+            db=db,
+            query=query,
+            base_url=base_url,
+            api_key=get_api_key(),
+            embedding_model=embedding_model,
+            limit=limit,
+        )
 
 
 def create_note_draft(topic_id: str) -> dict[str, Any]:
@@ -487,6 +557,7 @@ class SettingsInput(BaseModel):
     provider: str = "openrouter"
     base_url: str = "https://openrouter.ai/api/v1"
     model: str = "openai/gpt-4o-mini"
+    embedding_model: str = "text-embedding-3-small"
     api_key: str | None = None
 
 
@@ -532,10 +603,12 @@ app = FastAPI(title="Ren Local Service", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "tauri://localhost"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 initialize_database()
 _session_api_key: str | None = None
+_keyring_unavailable: bool = False
 
 
 def store_api_key(value: str) -> bool:
-    global _session_api_key
+    global _session_api_key, _keyring_unavailable
+    _keyring_unavailable = False
     try:
         import keyring
         keyring.set_password("Ren", "ai_api_key", value)
@@ -543,30 +616,39 @@ def store_api_key(value: str) -> bool:
         return True
     except Exception:
         _session_api_key = value
+        _keyring_unavailable = True
         return False
 
 
 def api_key_available() -> bool:
+    global _keyring_unavailable
     if _session_api_key:
         return True
+    if _keyring_unavailable:
+        return False
     try:
         import keyring
         return bool(keyring.get_password("Ren", "ai_api_key"))
     except Exception:
+        _keyring_unavailable = True
         return False
 
 
 def get_api_key() -> str | None:
+    global _keyring_unavailable
     if _session_api_key:
         return _session_api_key
+    if _keyring_unavailable:
+        return None
     try:
         import keyring
         return keyring.get_password("Ren", "ai_api_key")
     except Exception:
+        _keyring_unavailable = True
         return None
 
 
-def provider_answer(question: str, rows: list[sqlite3.Row]) -> str | None:
+def provider_answer(question: str, rows: list[dict[str, Any]]) -> str | None:
     """Ask the configured provider using only already-retrieved local context.
 
     Returning None deliberately selects the source-extractive fallback. A provider
@@ -577,11 +659,12 @@ def provider_answer(question: str, rows: list[sqlite3.Row]) -> str | None:
         return None
     with db_connection() as db:
         configured = {row["key"]: row["value"] for row in db.execute("SELECT key, value FROM settings")}
-    context = "\n\n".join(f"[S{index}] {row['filename']} — {row['anchor'] or 'Source'}\n{row['text'][:1200]}" for index, row in enumerate(rows, 1))
+    context, _ = build_grounded_context_and_citations(rows[:6])
     prompt = (
-        "Answer the user's question using only the supplied Ren source excerpts. "
-        "If the excerpts do not establish an answer, say that clearly. Be concise. "
-        "Cite claims inline using [S1], [S2], and so on.\n\n"
+        "Answer only from the provided Ren source excerpts. "
+        "If the evidence is insufficient, say so. "
+        "Cite every important claim as [S1], [S2], etc. "
+        "Do not use outside knowledge unless web search is explicitly enabled.\n\n"
         f"Question: {question}\n\nSource excerpts:\n{context}"
     )
     payload = json.dumps({
@@ -623,17 +706,9 @@ def chat_message_payload(row: sqlite3.Row) -> dict[str, Any]:
     return payload
 
 
-def chat_context(query: str) -> tuple[str, list[dict[str, str]]]:
+def chat_context(query: str) -> tuple[str, list[dict[str, Any]]]:
     rows = query_rows(query, limit=6)
-    citations = [
-        {"source_id": row["source_id"], "filename": row["filename"], "anchor": row["anchor"] or "Source"}
-        for row in rows
-    ]
-    context = "\n\n".join(
-        f"[S{index}] {row['filename']} — {row['anchor'] or 'Source'}\n{row['text'][:1000]}"
-        for index, row in enumerate(rows, 1)
-    )
-    return context, citations
+    return build_grounded_context_and_citations(rows)
 
 
 def source_payload(row: sqlite3.Row) -> dict[str, Any]:
@@ -679,6 +754,7 @@ def get_settings() -> dict[str, Any]:
         "provider": values.get("provider", "openrouter"),
         "base_url": values.get("base_url", "https://openrouter.ai/api/v1"),
         "model": values.get("model", "openai/gpt-4o-mini"),
+        "embedding_model": values.get("embedding_model", "text-embedding-3-small"),
         "api_key_configured": api_key_available(),
     }
 
@@ -686,7 +762,12 @@ def get_settings() -> dict[str, Any]:
 @app.put("/api/settings")
 def save_settings(payload: SettingsInput) -> dict[str, Any]:
     with db_connection() as db:
-        for key, value in {"provider": payload.provider.strip() or "openrouter", "base_url": payload.base_url.rstrip("/"), "model": payload.model.strip()}.items():
+        for key, value in {
+            "provider": payload.provider.strip() or "openrouter",
+            "base_url": payload.base_url.rstrip("/"),
+            "model": payload.model.strip(),
+            "embedding_model": (payload.embedding_model or "text-embedding-3-small").strip(),
+        }.items():
             db.execute("INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
     vault_saved = None
     if payload.api_key:
@@ -695,6 +776,7 @@ def save_settings(payload: SettingsInput) -> dict[str, Any]:
         "provider": payload.provider.strip() or "openrouter",
         "base_url": payload.base_url.rstrip("/"),
         "model": payload.model.strip(),
+        "embedding_model": (payload.embedding_model or "text-embedding-3-small").strip(),
         "api_key_configured": api_key_available(),
         "vault_saved": vault_saved,
     }
@@ -1105,23 +1187,29 @@ def reject_note(revision_id: str) -> dict[str, bool]:
 def search(q: str = "") -> list[dict[str, Any]]:
     if not q.strip():
         return []
-    return [{"chunk_id": row["id"], "source_id": row["source_id"], "filename": row["filename"], "anchor": row["anchor"], "text": row["text"]} for row in query_rows(q)]
+    chunks = query_rows(q, limit=6)
+    return [
+        {
+            "chunk_id": row.get("chunk_id") or row.get("id"),
+            "source_id": row["source_id"],
+            "filename": row["filename"],
+            "anchor": row.get("anchor") or "Source",
+            "text": row["text"],
+        }
+        for row in chunks
+    ]
 
 
 @app.post("/api/questions")
 def answer_question(payload: QuestionInput) -> dict[str, Any]:
-    rows = query_rows(payload.question, limit=5)
+    rows = query_rows(payload.question, limit=6)
     if not rows:
         answer = "I couldn't find supporting material in your Ren library yet. Import a relevant source or try different words."
-        citations: list[dict[str, str]] = []
+        citations: list[dict[str, Any]] = []
     else:
-        excerpts = []
-        citations = []
-        for row in rows:
-            excerpts.append(row["text"][:650])
-            citations.append({"source_id": row["source_id"], "filename": row["filename"], "anchor": row["anchor"] or "Source"})
+        context, citations = build_grounded_context_and_citations(rows)
         ai_answer = provider_answer(payload.question, rows)
-        answer = ai_answer or ("Based on your imported sources:\n\n" + "\n\n".join(excerpts[:3]))
+        answer = ai_answer or ("Based on your imported sources:\n\n" + "\n\n".join(r["text"][:650] for r in rows[:3]))
     with db_connection() as db:
         db.execute("INSERT INTO questions(id, question, answer, created_at) VALUES (?, ?, ?, ?)", (str(uuid.uuid4()), payload.question, answer, now()))
     return {"answer": answer, "citations": citations, "mode": "ai-grounded" if rows and api_key_available() and not answer.startswith("Based on") else "extractive"}
