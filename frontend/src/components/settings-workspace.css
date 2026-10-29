@@ -1,6 +1,11 @@
 .settings-workspace { max-width: 48rem; padding-bottom: 2rem; }
 .settings-workspace header { padding-top: 2.5rem; }
-.settings-card { display: grid; gap: 1rem; margin-top: 2rem; padding: 1.3rem; border: 1px solid var(--line); border-radius: 1rem; background: color-mix(in srgb, var(--panel) 90%, transparent); }
+.settings-presets { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: .75rem; margin-top: 1.5rem; }
+.preset-btn { display: grid; gap: .25rem; padding: .85rem 1rem; border: 1px solid var(--line); border-radius: .85rem; background: color-mix(in srgb, var(--panel) 80%, transparent); color: var(--text); text-align: left; cursor: pointer; transition: all .15s ease; }
+.preset-btn strong { font-size: .84rem; }
+.preset-btn span { color: var(--muted); font-size: .74rem; line-height: 1.35; }
+.preset-btn:hover, .preset-btn.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--panel)); }
+.settings-card { display: grid; gap: 1rem; margin-top: 1.2rem; padding: 1.3rem; border: 1px solid var(--line); border-radius: 1rem; background: color-mix(in srgb, var(--panel) 90%, transparent); }
 .settings-card label { display: grid; gap: .45rem; color: var(--text); font-size: .82rem; font-weight: 700; }
 .settings-card label small { color: var(--muted); font-size: .75rem; font-weight: 400; }
 .settings-card input { width: 100%; box-sizing: border-box; padding: .75rem .8rem; border: 1px solid var(--line); border-radius: .6rem; outline: 0; background: transparent; color: var(--text); font: inherit; }

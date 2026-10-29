@@ -305,6 +305,130 @@ class RenHybridRagTests(unittest.TestCase):
         self.assertIn("Cite every important claim as [S1], [S2], etc.", prompt)
         self.assertIn("Do not use outside knowledge unless web search is explicitly enabled.", prompt)
 
+    def test_rag_evaluation_benchmark(self):
+        from backend.evaluate_rag import run_rag_evaluation
+        summary = run_rag_evaluation()
+        self.assertGreaterEqual(summary["total_questions"], 15)
+        self.assertGreaterEqual(summary["metrics"]["top_5_source_hit_rate_pct"], 80.0)
+        self.assertGreaterEqual(summary["metrics"]["target_chunk_hit_rate_pct"], 80.0)
+        self.assertGreaterEqual(summary["metrics"]["answer_groundedness_pct"], 80.0)
+        self.assertGreaterEqual(summary["metrics"]["insufficient_evidence_accuracy_pct"], 80.0)
+
+    def test_retrieval_diversity_and_metadata_filters(self):
+        from backend.rag_service import select_diverse_chunks, extract_query_filters
+        candidates = [
+            (0.95, {"source_id": "src-A", "chunk_id": "c1", "anchor": "Section 1", "filename": "a.md"}),
+            (0.92, {"source_id": "src-A", "chunk_id": "c2", "anchor": "Section 1", "filename": "a.md"}),
+            (0.88, {"source_id": "src-B", "chunk_id": "c3", "anchor": "Section 1", "filename": "b.md"}),
+            (0.85, {"source_id": "src-A", "chunk_id": "c4", "anchor": "Section 2", "filename": "a.md"}),
+        ]
+        diverse = select_diverse_chunks(candidates, limit=3)
+        sources = [c["source_id"] for c in diverse]
+        # First is best from src-A, second is best from src-B, third is src-A different section
+        self.assertEqual(sources[0], "src-A")
+        self.assertEqual(sources[1], "src-B")
+        self.assertEqual(sources[2], "src-A")
+        self.assertEqual(diverse[2]["anchor"], "Section 2")
+
+        # Natural inline filter extraction
+        clean_q, filters = extract_query_filters("What do I know about RAG in rag-notes.txt?")
+        self.assertEqual(filters.get("source_filename"), "rag-notes.txt")
+        self.assertNotIn("rag-notes.txt", clean_q)
+
+        # Test recent_days, topic_name, and only_cards filters in SQL without crashing
+        clean_q2, filters2 = extract_query_filters("What is SQLite in the last 7 days topic:Storage only knowledge cards")
+        self.assertEqual(filters2.get("recent_days"), 7)
+        self.assertEqual(filters2.get("topic_name"), "Storage")
+        self.assertTrue(filters2.get("only_cards"))
+
+        with db_connection() as db:
+            # Verify recent_days filter executes timedelta cleanly
+            recent_res = retrieve_hybrid_chunks(
+                db=db,
+                query="What is SQLite?",
+                base_url="https://api.openai.com/v1",
+                api_key=None,
+                embedding_model="text-embedding-3-small",
+                filters={"recent_days": 7, "topic_name": "SQLite"},
+            )
+            self.assertIsInstance(recent_res, list)
+
+            # Verify only_cards filter queries knowledge cards cleanly
+            cards_res = retrieve_hybrid_chunks(
+                db=db,
+                query="What is SQLite?",
+                base_url="https://api.openai.com/v1",
+                api_key=None,
+                embedding_model="text-embedding-3-small",
+                filters={"only_cards": True},
+            )
+            self.assertIsInstance(cards_res, list)
+
+        # Verify low-confidence refusal in send_chat_message does not crash with UnboundLocalError
+        thread = self.client.post("/api/chat/threads", json={"title": "Refusal Test"}).json()
+        refusal_res = self.client.post(
+            f"/api/chat/threads/{thread['id']}/messages",
+            json={"content": "What is the capital city of Mars?"},
+        )
+        self.assertEqual(refusal_res.status_code, 200)
+        refusal_data = refusal_res.json()
+        self.assertIn("not enough evidence", refusal_data["content"].lower())
+        self.assertEqual(refusal_data["citations"], [])
+
+    def test_chat_feedback_submission(self):
+        # Test feedback endpoint recording
+        payload = {
+            "question": "What is TF-IDF?",
+            "answer": "TF-IDF is a numerical statistic.",
+            "retrieved_chunks": [{"filename": "search-notes.txt", "anchor": "Chunk 1"}],
+            "rating": "not_helpful",
+        }
+        res = self.client.post("/api/chat/feedback", json=payload)
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertTrue(data.get("saved"))
+        self.assertEqual(data.get("rating"), "not_helpful")
+
+    def test_reranker_and_quality_report(self):
+        from backend.rag_service import rerank_candidates
+        candidates = [
+            {"chunk": {"text": "General machine learning principles."}, "sem_score": 0.5, "fts_score": 0.2},
+            {"chunk": {"text": "TF-IDF calculates term frequency and inverse document frequency."}, "sem_score": 0.6, "fts_score": 0.9},
+        ]
+        reranked = rerank_candidates("What is TF-IDF?", candidates)
+        self.assertEqual(len(reranked), 2)
+        # The TF-IDF chunk must rank first due to proximity, term coverage, and exact concept weighting
+        self.assertIn("TF-IDF", reranked[0][1]["text"])
+
+        # Test API report endpoint
+        report_res = self.client.get("/api/eval/report")
+        self.assertEqual(report_res.status_code, 200)
+        data = report_res.json()
+        self.assertIn("comparison", data)
+        self.assertIn("hybrid_reranked", data["comparison"])
+
+    def test_local_cpu_end_to_end_chat_and_embeddings_without_api_key(self):
+        # Verify Ren works 100% locally on CPU without any API key or external provider
+        content = (
+            "# Local CPU Architecture\n\n"
+            "Ren runs completely locally on your PC CPU using SQLite FTS5 and 256-dimensional SimHash vectors. "
+            "Every answer is synthesized directly from local source excerpts with inline citations."
+        )
+        with patch("backend.app.get_api_key", return_value=None):
+            res = self.client.post("/api/captures/text", json={"title": "CPU Guide", "content": content})
+            self.assertEqual(res.status_code, 200)
+
+            thread = self.client.post("/api/chat/threads", json={"title": "Local CPU Chat"}).json()
+            msg_res = self.client.post(
+                f"/api/chat/threads/{thread['id']}/messages",
+                json={"content": "How does Ren run locally on a PC CPU?"},
+            )
+            self.assertEqual(msg_res.status_code, 200)
+            msg_data = msg_res.json()
+            self.assertIn("[S1]", msg_data["content"])
+            self.assertGreater(len(msg_data["citations"]), 0)
+            self.assertIsNone(msg_data.get("error"))
+
 
 if __name__ == "__main__":
     unittest.main()

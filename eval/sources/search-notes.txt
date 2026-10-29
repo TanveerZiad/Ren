@@ -1,0 +1,15 @@
+Information Retrieval & Search Systems Notes
+
+1. Term Frequency - Inverse Document Frequency (TF-IDF)
+TF-IDF is a numerical statistic intended to reflect how important a word is to a document in a collection or corpus.
+- Term frequency (TF) measures how frequently a term occurs in a specific document.
+- Inverse document frequency (IDF) diminishes the weight of terms that appear very frequently across the entire corpus (such as common stop words) and increases the weight of rare, specific terms.
+
+2. BM25 Ranking Algorithm
+Okapi BM25 is a non-linear probabilistic term-matching function that builds upon TF-IDF principles. It incorporates document length normalization and saturation limits on term frequencies to avoid over-weighting repeated words.
+
+3. Dense Vector Embeddings & Cosine Similarity
+Modern semantic search maps sentences into high-dimensional vector spaces. Semantic similarity is measured using cosine similarity between query and passage vectors, capturing synonyms and conceptual paraphrases that keyword search alone might miss.
+
+4. Hybrid Retrieval
+Hybrid retrieval combines keyword-based lexical matching (such as BM25 or SQLite FTS5) with dense vector embeddings to achieve high precision on exact acronyms (like TF-IDF) and high recall on semantic variations.

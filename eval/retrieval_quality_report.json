@@ -1,0 +1,35 @@
+{
+  "generated_at": "2026-10-29T18:06:35.079784+00:00",
+  "total_benchmark_questions": 20,
+  "answerable_questions": 15,
+  "negative_control_questions": 5,
+  "comparison": {
+    "keyword_only": {
+      "top1_source_accuracy_pct": 93.3,
+      "top5_source_recall_pct": 100.0,
+      "target_chunk_hit_rate_pct": 100.0,
+      "mrr": 0.967,
+      "answer_groundedness_pct": 100.0,
+      "refusal_accuracy_pct": 100.0,
+      "avg_latency_ms": 0.15
+    },
+    "semantic_only": {
+      "top1_source_accuracy_pct": 100.0,
+      "top5_source_recall_pct": 100.0,
+      "target_chunk_hit_rate_pct": 100.0,
+      "mrr": 1.0,
+      "answer_groundedness_pct": 100.0,
+      "refusal_accuracy_pct": 0.0,
+      "avg_latency_ms": 0.9
+    },
+    "hybrid_reranked": {
+      "top1_source_accuracy_pct": 100.0,
+      "top5_source_recall_pct": 100.0,
+      "target_chunk_hit_rate_pct": 100.0,
+      "mrr": 1.0,
+      "answer_groundedness_pct": 100.0,
+      "refusal_accuracy_pct": 100.0,
+      "avg_latency_ms": 4.59
+    }
+  }
+}

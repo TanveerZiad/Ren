@@ -34,36 +34,133 @@
 .message.user { justify-self: end; background: color-mix(in srgb, var(--accent) 15%, var(--panel)); }
 .message-label { margin-bottom: .45rem; color: var(--muted); font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .message p { margin: 0; white-space: pre-wrap; line-height: 1.6; }
-.message-sources {
-  display: flex;
-  flex-direction: column;
-  gap: .4rem;
-  margin-top: .85rem;
-  padding-top: .75rem;
+.message-sources-box {
+  margin-top: 1rem;
+  padding-top: 0.85rem;
   border-top: 1px dashed var(--line);
 }
-.message-sources .citation-pill {
+.message-sources-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.6rem;
+}
+.message-sources-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+.source-excerpt-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 0.6rem;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  border: 1px solid var(--line);
+}
+.source-excerpt-card .citation-pill {
   display: inline-flex;
   align-items: center;
-  gap: .4rem;
+  gap: 0.4rem;
   width: fit-content;
   max-width: 100%;
-  padding: .3rem .65rem;
+  padding: 0.2rem 0.5rem;
   border: 1px solid var(--line);
-  border-radius: .55rem;
-  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border-radius: 0.45rem;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--accent);
-  font-size: .82rem;
+  font-size: 0.8rem;
+  font-weight: 600;
   text-decoration: none;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  transition: all .15s ease;
+  transition: all 0.15s ease;
 }
-.message-sources .citation-pill:hover {
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
+.source-excerpt-card .citation-pill:hover {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
   border-color: var(--accent);
+}
+.source-excerpt-text {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--muted);
+  font-style: italic;
+}
+.feedback-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.feedback-btn {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.78rem;
+  cursor: pointer;
+  padding: 0.1rem 0.3rem;
+  border-radius: 0.3rem;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.feedback-btn:hover:not(:disabled) {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.feedback-btn.active {
+  color: var(--accent);
+  font-weight: 600;
+}
+.feedback-sep {
+  opacity: 0.4;
+}
+.feedback-status {
+  font-size: 0.72rem;
+  color: var(--accent);
+}
+.composer-filters-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--line);
+}
+.filter-select {
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  background: color-mix(in srgb, var(--panel) 90%, transparent);
   color: var(--text);
+  font-size: 0.76rem;
+  padding: 0.25rem 0.5rem;
+  outline: 0;
+  max-width: 12rem;
+}
+.filter-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.76rem;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+.filter-checkbox input {
+  accent-color: var(--accent);
+}
+.composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  margin-top: 0.4rem;
 }
 .inline-citation {
   display: inline-block;

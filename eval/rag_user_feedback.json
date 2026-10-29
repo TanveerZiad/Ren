@@ -1,0 +1,74 @@
+[
+  {
+    "id": "ebd24b2b-3e07-4df7-8c8d-d3e916ec311f",
+    "question": "What is TF-IDF?",
+    "answer": "TF-IDF is a numerical statistic.",
+    "retrieved_chunks": [
+      {
+        "filename": "search-notes.txt",
+        "anchor": "Chunk 1"
+      }
+    ],
+    "timestamp": "2026-10-29T10:27:06.535936+00:00"
+  },
+  {
+    "id": "8af4b20c-eb3b-4a18-8574-3fdcd281edcb",
+    "question": "What is TF-IDF?",
+    "answer": "TF-IDF is a numerical statistic.",
+    "retrieved_chunks": [
+      {
+        "filename": "search-notes.txt",
+        "anchor": "Chunk 1"
+      }
+    ],
+    "timestamp": "2026-10-29T17:16:36.157762+00:00"
+  },
+  {
+    "id": "3df7306e-2584-46bc-94f3-99acb9cfaf0b",
+    "question": "What is TF-IDF?",
+    "answer": "TF-IDF is a numerical statistic.",
+    "retrieved_chunks": [
+      {
+        "filename": "search-notes.txt",
+        "anchor": "Chunk 1"
+      }
+    ],
+    "timestamp": "2026-10-29T18:12:51.295372+00:00"
+  },
+  {
+    "id": "432e8b22-bc2f-4d73-8d52-ef0a1534284b",
+    "question": "What is TF-IDF?",
+    "answer": "TF-IDF is a numerical statistic.",
+    "retrieved_chunks": [
+      {
+        "filename": "search-notes.txt",
+        "anchor": "Chunk 1"
+      }
+    ],
+    "timestamp": "2026-10-29T18:21:57.814662+00:00"
+  },
+  {
+    "id": "dd25a5e1-c253-4b11-9468-a0c955d81b85",
+    "question": "What is TF-IDF?",
+    "answer": "TF-IDF is a numerical statistic.",
+    "retrieved_chunks": [
+      {
+        "filename": "search-notes.txt",
+        "anchor": "Chunk 1"
+      }
+    ],
+    "timestamp": "2026-10-29T18:22:55.500169+00:00"
+  },
+  {
+    "id": "3dee92ea-0ac4-421b-9aef-a50d4d0a0dc4",
+    "question": "What is TF-IDF?",
+    "answer": "TF-IDF is a numerical statistic.",
+    "retrieved_chunks": [
+      {
+        "filename": "search-notes.txt",
+        "anchor": "Chunk 1"
+      }
+    ],
+    "timestamp": "2026-10-29T18:24:00.749042+00:00"
+  }
+]

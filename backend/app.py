@@ -21,6 +21,7 @@ from typing import Any, Literal
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from backend.chat_service import complete_chat
@@ -177,6 +178,11 @@ def initialize_database() -> None:
               id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
               content TEXT NOT NULL, created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS rag_feedback (
+              id TEXT PRIMARY KEY, message_id TEXT, thread_id TEXT,
+              question TEXT NOT NULL, answer TEXT NOT NULL, retrieved_chunks_json TEXT NOT NULL,
+              rating TEXT NOT NULL, created_at TEXT NOT NULL
+            );
             """
         )
         try:
@@ -187,6 +193,16 @@ def initialize_database() -> None:
             db.execute("CREATE INDEX IF NOT EXISTS idx_chunks_hash ON chunks(content_hash)")
         except sqlite3.OperationalError:
             pass
+        for default_key, default_val in (
+            ("provider", "local_cpu"),
+            ("base_url", "http://127.0.0.1:11434/v1"),
+            ("model", "local-cpu-extractive"),
+            ("embedding_model", "local-cpu-simhash"),
+        ):
+            db.execute(
+                "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING",
+                (default_key, default_val),
+            )
 
 
 class StripHtml(HTMLParser):
@@ -297,7 +313,11 @@ def update_job(db: sqlite3.Connection, job_id: str, status: str, stage: str, err
 def configured_embedding_provider() -> tuple[str, str]:
     with db_connection() as db:
         values = {row["key"]: row["value"] for row in db.execute("SELECT key, value FROM settings")}
-    return values.get("base_url", "https://openrouter.ai/api/v1"), values.get("embedding_model", "text-embedding-3-small")
+    has_key = bool(get_api_key())
+    if has_key and values.get("embedding_model") in {None, "", "local-cpu-simhash"}:
+        return values.get("base_url", "https://openrouter.ai/api/v1"), "text-embedding-3-small"
+    default_embed = "text-embedding-3-small" if has_key else "local-cpu-simhash"
+    return values.get("base_url", "https://openrouter.ai/api/v1"), values.get("embedding_model", default_embed)
 
 
 def process_source(source_id: str, job_id: str) -> None:
@@ -492,7 +512,7 @@ def review_timestamp(review_count: int) -> str:
     return (datetime.now(UTC) + timedelta(days=days)).isoformat()
 
 
-def query_rows(query: str, limit: int = 6) -> list[dict[str, Any]]:
+def query_rows(query: str, limit: int = 6, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     base_url, embedding_model = configured_embedding_provider()
     with db_connection() as db:
         return retrieve_hybrid_chunks(
@@ -502,6 +522,7 @@ def query_rows(query: str, limit: int = 6) -> list[dict[str, Any]]:
             api_key=get_api_key(),
             embedding_model=embedding_model,
             limit=limit,
+            filters=filters,
         )
 
 
@@ -554,10 +575,10 @@ class UrlCapture(BaseModel):
 
 
 class SettingsInput(BaseModel):
-    provider: str = "openrouter"
-    base_url: str = "https://openrouter.ai/api/v1"
-    model: str = "openai/gpt-4o-mini"
-    embedding_model: str = "text-embedding-3-small"
+    provider: str = "local_cpu"
+    base_url: str = "http://127.0.0.1:11434/v1"
+    model: str = "local-cpu-extractive"
+    embedding_model: str = "local-cpu-simhash"
     api_key: str | None = None
 
 
@@ -575,6 +596,16 @@ class ChatMessageInput(BaseModel):
     content: str = Field(min_length=1, max_length=12000)
     thinking: Literal["focused", "balanced", "creative"] = "balanced"
     model: str | None = Field(default=None, max_length=160)
+    filters: dict[str, Any] | None = None
+
+
+class ChatFeedbackInput(BaseModel):
+    message_id: str | None = None
+    thread_id: str | None = None
+    question: str
+    answer: str
+    retrieved_chunks: list[dict[str, Any]] = Field(default_factory=list)
+    rating: Literal["helpful", "not_helpful"]
 
 
 class MemoryInput(BaseModel):
@@ -685,12 +716,13 @@ def provider_answer(question: str, rows: list[dict[str, Any]]) -> str | None:
         return None
 
 
-def configured_provider() -> tuple[str, str]:
+def configured_provider() -> tuple[str, str, str]:
     with db_connection() as db:
         values = {row["key"]: row["value"] for row in db.execute("SELECT key, value FROM settings")}
-    # OpenRouter accepts this API shape; the setting remains compatible with a
-    # different OpenAI-compatible provider for a self-hosted future.
-    return values.get("base_url", "https://openrouter.ai/api/v1"), values.get("model", "openai/gpt-4o-mini")
+    provider = values.get("provider", "local_cpu")
+    base_url = values.get("base_url", "http://127.0.0.1:11434/v1")
+    model = values.get("model", "local-cpu-extractive")
+    return provider, base_url, model
 
 
 def chat_thread_payload(row: sqlite3.Row) -> dict[str, Any]:
@@ -706,8 +738,8 @@ def chat_message_payload(row: sqlite3.Row) -> dict[str, Any]:
     return payload
 
 
-def chat_context(query: str) -> tuple[str, list[dict[str, Any]]]:
-    rows = query_rows(query, limit=6)
+def chat_context(query: str, filters: dict[str, Any] | None = None) -> tuple[str, list[dict[str, Any]]]:
+    rows = query_rows(query, limit=6, filters=filters)
     return build_grounded_context_and_citations(rows)
 
 
@@ -751,10 +783,10 @@ def get_settings() -> dict[str, Any]:
     with db_connection() as db:
         values = {row["key"]: row["value"] for row in db.execute("SELECT key, value FROM settings")}
     return {
-        "provider": values.get("provider", "openrouter"),
-        "base_url": values.get("base_url", "https://openrouter.ai/api/v1"),
-        "model": values.get("model", "openai/gpt-4o-mini"),
-        "embedding_model": values.get("embedding_model", "text-embedding-3-small"),
+        "provider": values.get("provider", "local_cpu"),
+        "base_url": values.get("base_url", "http://127.0.0.1:11434/v1"),
+        "model": values.get("model", "local-cpu-extractive"),
+        "embedding_model": values.get("embedding_model", "local-cpu-simhash"),
         "api_key_configured": api_key_available(),
     }
 
@@ -763,20 +795,20 @@ def get_settings() -> dict[str, Any]:
 def save_settings(payload: SettingsInput) -> dict[str, Any]:
     with db_connection() as db:
         for key, value in {
-            "provider": payload.provider.strip() or "openrouter",
+            "provider": payload.provider.strip() or "local_cpu",
             "base_url": payload.base_url.rstrip("/"),
-            "model": payload.model.strip(),
-            "embedding_model": (payload.embedding_model or "text-embedding-3-small").strip(),
+            "model": payload.model.strip() or "local-cpu-extractive",
+            "embedding_model": (payload.embedding_model or "local-cpu-simhash").strip(),
         }.items():
             db.execute("INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
     vault_saved = None
     if payload.api_key:
         vault_saved = store_api_key(payload.api_key)
     return {
-        "provider": payload.provider.strip() or "openrouter",
+        "provider": payload.provider.strip() or "local_cpu",
         "base_url": payload.base_url.rstrip("/"),
-        "model": payload.model.strip(),
-        "embedding_model": (payload.embedding_model or "text-embedding-3-small").strip(),
+        "model": payload.model.strip() or "local-cpu-extractive",
+        "embedding_model": (payload.embedding_model or "local-cpu-simhash").strip(),
         "api_key_configured": api_key_available(),
         "vault_saved": vault_saved,
     }
@@ -861,27 +893,93 @@ def send_chat_message(thread_id: str, payload: ChatMessageInput) -> dict[str, An
         )
         conversation_rows = db.execute("SELECT role, content FROM chat_messages WHERE thread_id=? ORDER BY created_at DESC LIMIT 16", (thread_id,)).fetchall()
         memories = [] if thread["incognito"] else [row["content"] for row in db.execute("SELECT content FROM memories ORDER BY updated_at DESC LIMIT 8")]
-    context, citations = chat_context(text)
-    base_url, default_model = configured_provider()
-    completion = complete_chat(
-        api_key=get_api_key(),
-        base_url=base_url,
-        model=payload.model or default_model,
-        conversation=[{"role": row["role"], "content": row["content"]} for row in reversed(conversation_rows)],
-        context=context,
-        memories=memories,
-        thinking=payload.thinking,
-    )
+    context, citations = chat_context(text, filters=payload.filters)
+    provider_name, base_url, default_model = configured_provider()
+    if not citations:
+        content = "I found some loosely related material, but not enough evidence for a reliable answer."
+        provider_used = False
+        error = None
+    else:
+        completion = complete_chat(
+            api_key=get_api_key(),
+            base_url=base_url,
+            model=payload.model or default_model,
+            conversation=[{"role": row["role"], "content": row["content"]} for row in reversed(conversation_rows)],
+            context=context,
+            memories=memories,
+            thinking=payload.thinking,
+            provider=provider_name,
+        )
+        content = completion.content
+        provider_used = completion.provider_used
+        error = completion.error
+
     assistant_id = str(uuid.uuid4())
     with db_connection() as db:
         db.execute(
             """INSERT INTO chat_messages(id, thread_id, role, content, status, model, citations_json, created_at)
                VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?)""",
-            (assistant_id, thread_id, completion.content, "complete" if completion.error is None else "failed", payload.model or default_model, json.dumps(citations), now()),
+            (assistant_id, thread_id, content, "complete" if error is None else "failed", payload.model or default_model, json.dumps(citations), now()),
         )
         db.execute("UPDATE chat_threads SET updated_at=? WHERE id=?", (now(), thread_id))
         assistant = db.execute("SELECT * FROM chat_messages WHERE id=?", (assistant_id,)).fetchone()
-    return chat_message_payload(assistant) | {"provider_used": completion.provider_used, "error": completion.error}
+    return chat_message_payload(assistant) | {"provider_used": provider_used, "error": error}
+
+
+@app.post("/api/chat/feedback")
+def submit_chat_feedback(payload: ChatFeedbackInput) -> dict[str, Any]:
+    feedback_id = str(uuid.uuid4())
+    timestamp = now()
+    with db_connection() as db:
+        db.execute(
+            """INSERT INTO rag_feedback(id, message_id, thread_id, question, answer, retrieved_chunks_json, rating, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                feedback_id,
+                payload.message_id,
+                payload.thread_id,
+                payload.question,
+                payload.answer,
+                json.dumps(payload.retrieved_chunks),
+                payload.rating,
+                timestamp,
+            ),
+        )
+
+    if payload.rating == "not_helpful":
+        eval_feedback_file = Path(__file__).resolve().parent.parent / "eval" / "rag_user_feedback.json"
+        try:
+            eval_feedback_file.parent.mkdir(parents=True, exist_ok=True)
+            existing = []
+            if eval_feedback_file.exists():
+                try:
+                    existing = json.loads(eval_feedback_file.read_text(encoding="utf-8"))
+                except Exception:
+                    existing = []
+            existing.append({
+                "id": feedback_id,
+                "question": payload.question,
+                "answer": payload.answer,
+                "retrieved_chunks": payload.retrieved_chunks,
+                "timestamp": timestamp,
+            })
+            eval_feedback_file.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    return {"id": feedback_id, "saved": True, "rating": payload.rating}
+
+
+@app.get("/api/eval/report")
+def get_evaluation_report() -> dict[str, Any]:
+    report_file = Path(__file__).resolve().parent.parent / "eval" / "retrieval_quality_report.json"
+    if report_file.exists():
+        try:
+            return json.loads(report_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    from backend.retrieval_report import evaluate_retrieval_pipeline
+    return evaluate_retrieval_pipeline()
 
 
 @app.get("/api/memories")
@@ -1222,4 +1320,22 @@ def export_data() -> dict[str, Any]:
         topics = [dict(row) for row in db.execute("SELECT * FROM topics")]
         notes = [dict(row) for row in db.execute("SELECT * FROM note_revisions WHERE status='approved'")]
     return {"exported_at": now(), "sources": sources, "topics": topics, "approved_note_revisions": notes}
+
+
+# Serve bundled production frontend when built locally (`frontend/dist`)
+FRONTEND_DIST_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if FRONTEND_DIST_DIR.exists():
+    assets_dir = FRONTEND_DIST_DIR / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def serve_spa(full_path: str):
+        if full_path.startswith("api/"):
+            raise HTTPException(404, "Not found")
+        candidate = FRONTEND_DIST_DIR / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(str(candidate))
+        return FileResponse(str(FRONTEND_DIST_DIR / "index.html"))
+
 
