@@ -60,9 +60,16 @@ Write-Host "`n[5/6] Initializing local SQLite database and CPU settings..." -For
 & $venvPython -c "from backend.app import initialize_database; initialize_database()"
 Write-Host "      Database initialized in $env:APPDATA\Ren\ren.sqlite3 (CPU mode)." -ForegroundColor Green
 
-# 6. Create Windows Start Menu & Desktop Shortcuts
-Write-Host "`n[6/6] Creating Windows Shortcuts..." -ForegroundColor Yellow
+# 6. Create Windows Start Menu & Desktop Shortcuts with App Icon
+Write-Host "`n[6/6] Creating Windows Shortcuts with Ren App Icon..." -ForegroundColor Yellow
 $launcherBat = Join-Path $projectRoot 'start-ren.bat'
+$appIconIco = Join-Path $projectRoot 'docs\assets\ren-icon.ico'
+$dataDirIco = Join-Path $env:APPDATA 'Ren\ren-icon.ico'
+if (Test-Path $appIconIco) {
+    New-Item -ItemType Directory -Path (Split-Path -Parent $dataDirIco) -Force | Out-Null
+    Copy-Item -Path $appIconIco -Destination $dataDirIco -Force
+}
+$iconLocation = if (Test-Path $dataDirIco) { "$dataDirIco,0" } else { "$appIconIco,0" }
 $wshShell = New-Object -ComObject WScript.Shell
 
 # Start Menu Shortcut
@@ -71,6 +78,7 @@ $startShortcutPath = Join-Path $startMenuDir 'Ren Knowledge Companion.lnk'
 $shortcut = $wshShell.CreateShortcut($startShortcutPath)
 $shortcut.TargetPath = $launcherBat
 $shortcut.WorkingDirectory = $projectRoot
+$shortcut.IconLocation = $iconLocation
 $shortcut.Description = "Ren Local-First Personal Knowledge Companion (CPU Mode)"
 $shortcut.Save()
 Write-Host "      Start Menu shortcut created: $startShortcutPath" -ForegroundColor Green
@@ -81,6 +89,7 @@ if ($CreateDesktopShortcut) {
     $dShortcut = $wshShell.CreateShortcut($desktopShortcutPath)
     $dShortcut.TargetPath = $launcherBat
     $dShortcut.WorkingDirectory = $projectRoot
+    $dShortcut.IconLocation = $iconLocation
     $dShortcut.Description = "Ren Local-First Personal Knowledge Companion (CPU Mode)"
     $dShortcut.Save()
     Write-Host "      Desktop shortcut created: $desktopShortcutPath" -ForegroundColor Green

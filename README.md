@@ -1,6 +1,8 @@
 <div align="center">
 
-# ◌ Ren
+<img src="docs/assets/ren-logo.png" alt="Ren Logo" width="140" height="140" />
+
+# Ren
 
 ### **The Local-First Personal Knowledge Field**
 *Drop the mess. Extract what matters. Remember on time. Ask with verifiable proof.*

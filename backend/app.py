@@ -193,16 +193,6 @@ def initialize_database() -> None:
             db.execute("CREATE INDEX IF NOT EXISTS idx_chunks_hash ON chunks(content_hash)")
         except sqlite3.OperationalError:
             pass
-        for default_key, default_val in (
-            ("provider", "local_cpu"),
-            ("base_url", "http://127.0.0.1:11434/v1"),
-            ("model", "local-cpu-extractive"),
-            ("embedding_model", "local-cpu-simhash"),
-        ):
-            db.execute(
-                "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING",
-                (default_key, default_val),
-            )
 
 
 class StripHtml(HTMLParser):
@@ -313,10 +303,7 @@ def update_job(db: sqlite3.Connection, job_id: str, status: str, stage: str, err
 def configured_embedding_provider() -> tuple[str, str]:
     with db_connection() as db:
         values = {row["key"]: row["value"] for row in db.execute("SELECT key, value FROM settings")}
-    has_key = bool(get_api_key())
-    if has_key and values.get("embedding_model") in {None, "", "local-cpu-simhash"}:
-        return values.get("base_url", "https://openrouter.ai/api/v1"), "text-embedding-3-small"
-    default_embed = "text-embedding-3-small" if has_key else "local-cpu-simhash"
+    default_embed = "text-embedding-3-small" if api_key_available() else "local-cpu-simhash"
     return values.get("base_url", "https://openrouter.ai/api/v1"), values.get("embedding_model", default_embed)
 
 

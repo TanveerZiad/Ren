@@ -1,0 +1,22 @@
+{
+  "name": "Ren — Personal Knowledge Field",
+  "short_name": "Ren",
+  "description": "Local-first personal knowledge companion running 100% on your PC CPU.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0e0c",
+  "theme_color": "#2b6cb0",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/ren-logo.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
+
